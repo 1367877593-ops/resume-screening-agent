@@ -1,0 +1,30 @@
+# 所有阈值集中在此。代码中禁止出现魔数。
+
+match:
+  # 总分 >= advance 推进面试；>= hold 待定；其余淘汰
+  # 任一硬性要求判定为 NO 时一票否决，不看总分
+  advance: 75.0
+  hold: 60.0
+
+gate:
+  # 通过/不通过规则，见 checker/gate.py
+  max_major: 3          # major 数量 >= 此值判 FAIL
+  max_rounds: 2         # 修订轮数上限，超出熔断转人工
+
+question:
+  min_count: 10         # 题目数量下限（题目要求 >= 10）
+  duplicate_similarity: 0.85   # 题干相似度超过此值判重复
+
+followup:
+  min_count: 3          # 追问数量区间（题目要求 3-5）
+  max_count: 5
+
+evidence:
+  # span 在原文中的模糊匹配阈值，低于此值判定为「查无此出处」
+  min_similarity: 0.80
+  min_span_length: 4    # 过短的 span 不具备归因意义
+
+simulation:
+  expert_pass: 70.0     # 理想专家低于此分 -> 题目本身有问题
+  bluffer_max: 50.0     # 背题党高于此分 -> 题目无区分度
+  resume_pass: 60.0     # 简历人格低于此分 -> 超出候选人射程

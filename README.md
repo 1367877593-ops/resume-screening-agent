@@ -9,15 +9,19 @@
 
 ## 快速开始
 
-环境要求：Python 3.11+
+环境要求：Python 3.9+
 
 ```bash
 git clone https://github.com/1367877593-ops/resume-screening-agent.git
 cd resume-screening-agent
-make demo
+make install && make test
 ```
 
-`make demo` **无需 API Key** —— 它以 `DEMO_MODE=1` 启动，回放仓库内置的调用缓存（`data/demo_cache/`）与样例数据（1 份 JD + 4 类简历），浏览器打开 `http://localhost:8501` 即可看到完整结果。
+> **当前进度**：L1 的契约层、Harness、文档接入、匹配打分与排序决策已完成并有测试覆盖
+> （`make test`，38 项）。Streamlit 界面属于 L1 阶段 5，尚未实现，
+> 因此 `make demo` / `make run` 目前会提示未就绪 —— 不会给你一串堆栈。
+
+界面就绪后，`make demo` **无需 API Key**：它以 `DEMO_MODE=1` 启动，回放仓库内置的调用缓存（`data/demo_cache/`）与样例数据，浏览器打开 `http://localhost:8501` 即可看到完整结果。
 
 需要用真实模型跑自己的数据：
 
