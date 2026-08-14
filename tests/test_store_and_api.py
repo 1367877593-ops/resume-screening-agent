@@ -234,3 +234,37 @@ def test_persist_writes_to_store(wired):
     run_id = api.persist(result)
     assert api.load(run_id)["jd"]["title"] == "AI 产品实习生"
     assert api.history()[0]["run_id"] == run_id
+
+
+# ============================================================ 公网保护
+
+
+def test_access_code_is_optional_and_verified_in_constant_time(monkeypatch):
+    from config.settings import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "app_access_code", "a-strong-demo-code", raising=False)
+
+    assert api.access_control_required()
+    assert api.verify_access_code("a-strong-demo-code")
+    assert not api.verify_access_code("wrong-code")
+
+
+def test_run_rejects_too_many_resumes_before_calling_model(monkeypatch):
+    from config.settings import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "max_resumes_per_run", 1, raising=False)
+
+    with pytest.raises(ValueError, match="单次最多处理 1 份简历"):
+        api.run("JD", [("a.txt", b"a"), ("b.txt", b"b")])
+
+
+def test_run_rejects_oversized_total_upload(monkeypatch):
+    from config.settings import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "max_total_upload_mb", 0, raising=False)
+
+    with pytest.raises(ValueError, match="简历总大小不能超过 0 MB"):
+        api.run("JD", [("a.txt", b"a")])

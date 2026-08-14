@@ -49,6 +49,13 @@ DeepSeek / Qwen / Kimi，在 `.env` 里切换 `LLM_PROVIDER`，业务代码无�
 Key 不进入命令行参数或 shell 历史；错误信息在进入 UI 前会再次脱敏。不要通过
 聊天、截图或录屏分享 Key，也不要使用 `git add -f .env`。
 
+## 分享给别人使用
+
+推荐发布为带访问口令的 Streamlit Web Demo。使用者打开网页即可上传 JD 和
+简历；DeepSeek Key 只保存在云端 Secret 中，不会发送到浏览器或 GitHub。
+项目已包含部署依赖、上传限制、访问口令门禁与 Secret 模板，具体步骤见
+[DEPLOYMENT.md](./DEPLOYMENT.md)。
+
 | 命令 | 作用 |
 |---|---|
 | `make demo` | 无 Key 回放演示 |

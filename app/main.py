@@ -120,9 +120,32 @@ def _run(uploaded) -> None:
         st.session_state["error"] = f"{type(e).__name__}: {e}"
 
 
+def access_gate() -> None:
+    """可选的公网访问门禁；口令只在当前浏览器会话中保留认证结果。"""
+    if not api.access_control_required():
+        return
+    if st.session_state.get("access_granted"):
+        # 此时输入框尚未实例化，可安全移除上一次提交的口令。
+        st.session_state.pop("access_code_input", None)
+        return
+
+    st.subheader("访问验证")
+    st.caption("这是受保护的演示环境。请输入项目所有者提供的访问口令。")
+    code = st.text_input("访问口令", type="password", key="access_code_input")
+    if st.button("进入系统", type="primary"):
+        if api.verify_access_code(code):
+            st.session_state["access_granted"] = True
+            st.rerun()
+        else:
+            st.error("访问口令不正确")
+    st.stop()
+
+
 def main() -> None:
     st.title("智能简历解析与试题生成引擎")
     st.caption("从非结构化简历到结构化决策建议：匹配打分 · 推进决策 · 面试题目 · 独立校验")
+
+    access_gate()
 
     sidebar()
 

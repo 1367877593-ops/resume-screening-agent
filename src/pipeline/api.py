@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hmac
 import tempfile
 import uuid
 from pathlib import Path
@@ -63,12 +64,32 @@ def _to_doc(upload: Upload) -> RawDoc:
 
 
 def run(jd_text: str, resumes: Sequence[Upload]) -> PipelineResult:
+    settings = get_settings()
     if not jd_text.strip():
         raise ValueError("JD 不能为空")
     if not resumes:
         raise ValueError("至少需要一份简历")
+    if len(jd_text) > settings.max_jd_chars:
+        raise ValueError(f"JD 过长，最多允许 {settings.max_jd_chars} 个字符")
+    if len(resumes) > settings.max_resumes_per_run:
+        raise ValueError(f"单次最多处理 {settings.max_resumes_per_run} 份简历")
+    total_bytes = sum(len(data) for _, data in resumes)
+    max_bytes = settings.max_total_upload_mb * 1024 * 1024
+    if total_bytes > max_bytes:
+        raise ValueError(f"简历总大小不能超过 {settings.max_total_upload_mb} MB")
     jd_doc = load_text(jd_text, filename="jd")
     return run_pipeline(jd_doc, [_to_doc(u) for u in resumes])
+
+
+def access_control_required() -> bool:
+    """公网部署时由 Secret 开启；只向 UI 暴露是否需要认证。"""
+    return bool(get_settings().app_access_code)
+
+
+def verify_access_code(candidate: str) -> bool:
+    """常量时间比较访问口令，避免把正确值暴露给 UI。"""
+    expected = get_settings().app_access_code
+    return bool(expected) and hmac.compare_digest(candidate, expected)
 
 
 # ------------------------------------------------------------------ 序列化
@@ -148,5 +169,6 @@ def runtime_mode() -> Dict[str, Any]:
         "model": s.llm_model,
         # UI 只得到布尔值，绝不接触密钥本身。
         "api_key_configured": bool(s.llm_api_key),
+        "access_control": bool(s.app_access_code),
         "cache_enabled": s.cache_enabled,
     }

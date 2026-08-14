@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     demo_cache_dir: Path = Path("data/demo_cache")
     lessons_path: Path = Path("data/runtime/lessons.jsonl")
 
+    # ---- 公开部署保护 ----
+    # 为空时不启用口令；部署到公网时必须通过云端 Secret 设置。
+    app_access_code: str = ""
+    max_resumes_per_run: int = 5
+    max_jd_chars: int = 20_000
+    max_total_upload_mb: int = 20
+
     # ---- 调用控制 ----
     llm_timeout_seconds: int = 60
     llm_max_retries: int = 3
