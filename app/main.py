@@ -51,11 +51,19 @@ def sidebar() -> None:
         st.divider()
         st.subheader("输入")
 
-        if st.button("载入样例数据", width="stretch"):
+        sample_button = "一键运行内置 Demo" if mode["demo_mode"] else "载入样例数据"
+        if st.button(sample_button, width="stretch"):
             jd_text, resumes = api.sample_inputs()
             st.session_state["jd_text"] = jd_text
             st.session_state["sample_resumes"] = resumes
+            # file_uploader 不能直接赋空值；换一个 widget key 可可靠清除旧上传。
+            st.session_state["uploader_generation"] = (
+                st.session_state.get("uploader_generation", 0) + 1
+            )
             st.session_state.pop("result", None)
+            st.session_state.pop("error", None)
+            if mode["demo_mode"]:
+                _run([])
 
         st.text_area("JD（可直接粘贴）", key="jd_text", height=220,
                      placeholder="把职位描述粘贴到这里…")
@@ -63,6 +71,7 @@ def sidebar() -> None:
         uploaded = st.file_uploader(
             "简历（可多选，支持 PDF / Word / txt）",
             type=["pdf", "docx", "txt", "md"], accept_multiple_files=True,
+            key=f"resume_uploader_{st.session_state.get('uploader_generation', 0)}",
         )
 
         n_sample = len(st.session_state.get("sample_resumes", []))
@@ -82,6 +91,17 @@ def _run(uploaded) -> None:
         else st.session_state.get("sample_resumes", [])
     )
     jd_text = st.session_state.get("jd_text", "")
+
+    # Demo 回放只包含内置样例。提前拦截自定义输入，避免把实现细节和缓存键
+    # 直接暴露给使用者；实时模式仍可正常处理任意 JD 与简历。
+    if api.runtime_mode()["demo_mode"] and not api.is_sample_input(jd_text, resumes):
+        st.session_state.pop("result", None)
+        st.session_state["error"] = (
+            "当前是无 API Key 的演示模式，只能回放内置样例。"
+            "请点击左侧「一键运行内置 Demo」；如需分析自己的 JD 和简历，"
+            "请在 .env 中设置 DEMO_MODE=0 并配置 LLM_API_KEY。"
+        )
+        return
 
     try:
         with st.spinner("解析中…提取、匹配、出题与校验会依次进行"):
@@ -107,7 +127,10 @@ def main() -> None:
 
     payload = st.session_state.get("result")
     if not payload:
-        st.info("左侧点「载入样例数据」再点「开始筛选」，即可看到完整流程。")
+        if api.runtime_mode()["demo_mode"]:
+            st.info("点击左侧「一键运行内置 Demo」，即可看到完整筛选流程。")
+        else:
+            st.info("载入样例或上传自己的简历，再点「开始筛选」。")
         with st.expander("这个系统做了什么"):
             st.markdown(
                 "1. **JD 拆解**成可逐条判定的加权要求项，标出硬性门槛\n"

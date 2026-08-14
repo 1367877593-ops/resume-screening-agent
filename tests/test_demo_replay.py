@@ -43,3 +43,11 @@ def test_bundled_demo_runs_full_l1_without_live_client(monkeypatch, tmp_path):
     assert question_stage["notes"][0]["issue_code"] == "Q_COUNT_LT_MIN"
     assert rejected["questions"] is None and rejected["followups"] is None
     assert not (tmp_path / "runtime-cache").exists()
+
+
+def test_sample_input_preflight_distinguishes_custom_data():
+    jd_text, resumes = api.sample_inputs()
+
+    assert api.is_sample_input(jd_text, resumes)
+    assert not api.is_sample_input(jd_text + "\n新增要求", resumes)
+    assert not api.is_sample_input(jd_text, [("custom.txt", b"custom resume")])

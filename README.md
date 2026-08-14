@@ -23,7 +23,8 @@ make demo
 `make demo` **无需 API Key**：它以 `DEMO_MODE=1` 启动，使用固定的
 `demo / demo-v1` 命名空间回放 `data/demo_cache/`。即使本机 `.env` 配置了其他
 provider 或模型，也不会初始化真实客户端。浏览器打开 `http://localhost:8501`，
-依次点击「载入样例数据」和「开始筛选」即可看到完整结果。
+点击「一键运行内置 Demo」即可载入固定样例并看到完整结果；该操作也会清除
+文件选择器中残留的自定义上传，避免误触发缓存未命中。
 
 内置样例会故意让首轮只生成 9 道题：规则 Checker 报出 `Q_COUNT_LT_MIN`，
 Reviser 补齐第 10 道后重新校验通过。这样 Demo 实际展示了“发现问题 → 反馈 →

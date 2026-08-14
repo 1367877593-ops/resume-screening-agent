@@ -36,6 +36,16 @@ def sample_inputs() -> Tuple[str, List[Upload]]:
     return jd_text, resumes
 
 
+def is_sample_input(jd_text: str, resumes: Sequence[Upload]) -> bool:
+    """判断当前输入是否与内置 Demo 完全一致。
+
+    Demo 缓存按输入内容寻址；哪怕只改了一个字符，也不应等到流水线中途才
+    暴露 ``CacheMissError``。UI 用这个轻量预检尽早给出可理解的提示。
+    """
+    sample_jd, sample_resumes = sample_inputs()
+    return jd_text == sample_jd and list(resumes) == sample_resumes
+
+
 def _to_doc(upload: Upload) -> RawDoc:
     """上传的是字节流，pdf/docx 解析需要真实文件，落到临时目录再读。"""
     name, data = upload
