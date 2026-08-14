@@ -13,6 +13,7 @@ for path in (str(ROOT / "src"), str(ROOT)):
         sys.path.insert(0, path)
 
 from config.settings import get_settings  # noqa: E402
+from harness.errors import LLMCallError  # noqa: E402
 from harness.llm_client import get_client  # noqa: E402
 
 
@@ -29,12 +30,15 @@ def main() -> None:
         raise SystemExit("LLM_API_KEY 为空，请先运行 make configure-live。")
 
     client = get_client(settings)
-    response = client.complete(
-        "只输出 JSON。",
-        '返回 {"status":"ok"}，不要添加其他字段。',
-        settings.llm_model,
-        json_schema={"type": "object", "properties": {"status": {"const": "ok"}}},
-    )
+    try:
+        response = client.complete(
+            "只输出 JSON。",
+            '返回 {"status":"ok"}，不要添加其他字段。',
+            settings.llm_model,
+            json_schema={"type": "object", "properties": {"status": {"const": "ok"}}},
+        )
+    except LLMCallError as exc:
+        raise SystemExit(f"真实连接失败：{exc}") from None
     payload = json.loads(response.text)
     if payload.get("status") != "ok":
         raise SystemExit("模型已响应，但最小 JSON 校验失败。")

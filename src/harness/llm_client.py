@@ -185,6 +185,13 @@ class _HTTPClient(BaseClient):
                     continue
                 if resp.status_code >= 400:
                     # 4xx 里的鉴权/参数错误重试多少次都一样，直接失败
+                    if resp.status_code == 401:
+                        # 部分厂商会在错误正文里回显 Key 的尾部，鉴权失败时不转发正文。
+                        raise LLMCallError(
+                            "HTTP 401: API Key 无效或不属于当前接口，请重新生成并配置。"
+                        )
+                    if resp.status_code == 402:
+                        raise LLMCallError("HTTP 402: API 账户余额不足。")
                     raise LLMCallError(
                         self._safe_error(f"HTTP {resp.status_code}: {resp.text[:300]}")
                     )
