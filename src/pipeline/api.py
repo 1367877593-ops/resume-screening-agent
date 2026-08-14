@@ -146,5 +146,7 @@ def runtime_mode() -> Dict[str, Any]:
         "demo_mode": s.demo_mode,
         "provider": s.llm_provider,
         "model": s.llm_model,
+        # UI 只得到布尔值，绝不接触密钥本身。
+        "api_key_configured": bool(s.llm_api_key),
         "cache_enabled": s.cache_enabled,
     }

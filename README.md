@@ -30,20 +30,31 @@ provider 或模型，也不会初始化真实客户端。浏览器打开 `http:/
 Reviser 补齐第 10 道后重新校验通过。这样 Demo 实际展示了“发现问题 → 反馈 →
 修订 → 复检”的闭环，而不是只展示一份预先准备好的最终报告。
 
-需要用真实模型跑自己的数据：
+需要用 DeepSeek V4 Pro 跑自己的数据：
 
 ```bash
-cp .env.example .env    # 填入 API Key，.env 已在 .gitignore 中
 make install
+make configure-live     # Key 在终端中隐藏输入，安全写入本地 .env
+make live-check         # 一次极小真实请求，验证鉴权和模型名
 make run
 ```
 
-支持 OpenAI / Claude / DeepSeek / Qwen / Kimi，在 `.env` 里切换 `LLM_PROVIDER`，业务代码无感知（见下文 Harness 层）。
+默认实时模型为官方标识 `deepseek-v4-pro`，接口地址为
+`https://api.deepseek.com`。结构化任务默认关闭 thinking，并把单次响应限制在
+8192 tokens，以减少延迟并给费用设置硬上限。项目仍支持 OpenAI / Claude /
+DeepSeek / Qwen / Kimi，在 `.env` 里切换 `LLM_PROVIDER`，业务代码无感知
+（见下文 Harness 层）。
+
+安全约束：`.env` 已被 Git 忽略并以 `0600` 权限写入；配置脚本使用隐藏输入，
+Key 不进入命令行参数或 shell 历史；错误信息在进入 UI 前会再次脱敏。不要通过
+聊天、截图或录屏分享 Key，也不要使用 `git add -f .env`。
 
 | 命令 | 作用 |
 |---|---|
 | `make demo` | 无 Key 回放演示 |
 | `make demo-cache` | 重建并验证内置 Demo 缓存 |
+| `make configure-live` | 隐藏输入 Key，配置 DeepSeek V4 Pro 实时模式 |
+| `make live-check` | 用极小请求验证真实模型连接，不输出 Key |
 | `make install` | 安装依赖 |
 | `make run` | 接真实模型启动 |
 | `make eval` | 输出稳定性与诊断准确率 |

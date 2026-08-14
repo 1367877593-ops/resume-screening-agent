@@ -22,8 +22,12 @@ class Settings(BaseSettings):
     llm_provider: str = "mock"
     llm_api_key: str = ""
     llm_base_url: str = ""
-    llm_model: str = "deepseek-chat"
-    llm_model_cheap: str = "deepseek-chat"
+    llm_model: str = "deepseek-v4-pro"
+    llm_model_cheap: str = "deepseek-v4-flash"
+    # 结构化抽取默认关闭思考输出，减少延迟与费用；仍然使用真实 V4 Pro 推理。
+    llm_thinking_mode: str = "disabled"
+    # 给单次请求设置硬上限，避免异常输出持续消耗额度。
+    llm_max_output_tokens: int = 8192
 
     # ---- 运行模式 ----
     # DEMO_MODE=1 时强制走 data/demo_cache/ 回放，未命中显式报错，绝不静默回退

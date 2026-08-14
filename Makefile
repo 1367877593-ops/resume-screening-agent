@@ -1,4 +1,4 @@
-.PHONY: install test demo demo-cache run eval clean
+.PHONY: install test demo demo-cache configure-live live-check run eval clean
 
 PY  := .venv/bin/python
 PIP := .venv/bin/pip
@@ -21,6 +21,14 @@ demo: .venv
 demo-cache: .venv
 	$(PY) scripts/generate_demo_cache.py
 	$(PY) -m pytest tests/test_demo_replay.py -q
+
+# 在终端中隐藏输入 Key，并以 0600 权限写入被 Git 忽略的 .env
+configure-live: .venv
+	$(PY) scripts/configure_live.py
+
+# 发起一次极小的真实模型请求，验证鉴权、模型名和 JSON 输出
+live-check: .venv
+	$(PY) scripts/check_live_connection.py
 
 run: .venv
 	$(PY) -m streamlit run app/main.py

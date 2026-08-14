@@ -14,7 +14,13 @@ from pydantic import BaseModel, Field
 
 from harness.cache import Cache, make_key
 from harness.errors import CacheMissError, StructuredOutputError
-from harness.llm_client import LLMResponse, MockClient, synthesize_from_schema
+from harness.llm_client import (
+    LLMCallError,
+    LLMResponse,
+    MockClient,
+    OpenAICompatibleClient,
+    synthesize_from_schema,
+)
 from harness.structured import extract_json, load_prompt, render
 from harness.trace import Tracer, read_traces, summarize
 
@@ -112,6 +118,43 @@ def test_synthesize_produces_schema_valid_instance():
 def test_mock_client_returns_parsable_json():
     resp = MockClient().complete("s", "u", "m", json_schema=Toy.model_json_schema())
     Toy.model_validate_json(resp.text)
+
+
+def test_deepseek_v4_request_is_bounded_and_non_thinking():
+    client = OpenAICompatibleClient(
+        "secret-for-unit-test",
+        "https://api.deepseek.com",
+        timeout=30,
+        max_retries=1,
+        max_output_tokens=8192,
+        provider_name="deepseek",
+        thinking_mode="disabled",
+    )
+    url, headers, body = client._build("system json", "user", "deepseek-v4-pro", {})
+
+    assert url == "https://api.deepseek.com/chat/completions"
+    assert body["model"] == "deepseek-v4-pro"
+    assert body["thinking"] == {"type": "disabled"}
+    assert body["max_tokens"] == 8192
+    assert headers["Authorization"].startswith("Bearer ")
+
+
+def test_client_rejects_secret_in_base_url():
+    with pytest.raises(LLMCallError):
+        OpenAICompatibleClient(
+            "secret-for-unit-test",
+            "https://api.deepseek.com?api_key=do-not-put-secrets-here",
+            timeout=30,
+            max_retries=1,
+        )
+
+
+def test_error_redaction_removes_api_key():
+    key = "secret-for-unit-test"
+    client = OpenAICompatibleClient(
+        key, "https://api.deepseek.com", timeout=30, max_retries=1
+    )
+    assert key not in client._safe_error(f"upstream echoed {key}")
 
 
 # ---------------------------------------------------------------- 结构化调用

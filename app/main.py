@@ -46,6 +46,10 @@ def sidebar() -> None:
             st.success("演示模式：回放内置缓存，不调用真实模型")
         else:
             st.info(f"实时模式：{mode['provider']} / {mode['model']}")
+            if mode["api_key_configured"]:
+                st.success("API Key：已安全加载（不会显示）")
+            else:
+                st.warning("API Key：尚未配置")
         st.caption("缓存：" + ("开启" if mode["cache_enabled"] else "关闭"))
 
         st.divider()

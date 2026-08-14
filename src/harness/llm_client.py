@@ -13,6 +13,7 @@ import random
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -21,7 +22,7 @@ from harness.errors import LLMCallError
 # OpenAI 兼容协议覆盖了国内外大多数厂商，只有 base_url 不同
 _OPENAI_COMPATIBLE_BASES = {
     "openai": "https://api.openai.com/v1",
-    "deepseek": "https://api.deepseek.com/v1",
+    "deepseek": "https://api.deepseek.com",
     "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
     "kimi": "https://api.moonshot.cn/v1",
 }
@@ -135,16 +136,33 @@ def _sleep_backoff(attempt: int) -> None:
 
 
 class _HTTPClient(BaseClient):
-    def __init__(self, api_key: str, base_url: str, timeout: int, max_retries: int) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        timeout: int,
+        max_retries: int,
+        max_output_tokens: int = 8192,
+    ) -> None:
         if not api_key:
             raise LLMCallError(
                 f"provider={self.provider} 需要 API Key，但 LLM_API_KEY 为空。"
                 " 请在 .env 中填写，或用 `make demo` 走无 Key 的缓存回放。"
             )
+        parsed = urlparse(base_url)
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise LLMCallError(
+                "LLM_BASE_URL 只能填写服务地址，不能包含账号、Key、查询参数或片段。"
+            )
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max_retries
+        self.max_output_tokens = max_output_tokens
+
+    def _safe_error(self, value: Any) -> str:
+        """错误信息在进入 UI 或日志前移除密钥，防止上游意外回显。"""
+        return str(value).replace(self.api_key, "[REDACTED]")
 
     def _build(self, system, user, model, json_schema):
         raise NotImplementedError
@@ -162,12 +180,14 @@ class _HTTPClient(BaseClient):
                 with httpx.Client(timeout=self.timeout) as client:
                     resp = client.post(url, headers=headers, json=body)
                 if resp.status_code in _RETRYABLE_STATUS:
-                    last_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                    last_err = self._safe_error(f"HTTP {resp.status_code}: {resp.text[:200]}")
                     _sleep_backoff(attempt)
                     continue
                 if resp.status_code >= 400:
                     # 4xx 里的鉴权/参数错误重试多少次都一样，直接失败
-                    raise LLMCallError(f"HTTP {resp.status_code}: {resp.text[:300]}")
+                    raise LLMCallError(
+                        self._safe_error(f"HTTP {resp.status_code}: {resp.text[:300]}")
+                    )
                 text, ptok, ctok = self._parse(resp.json())
                 return LLMResponse(
                     text=text,
@@ -179,7 +199,7 @@ class _HTTPClient(BaseClient):
                     attempts=attempt + 1,
                 )
             except (httpx.TimeoutException, httpx.TransportError) as e:
-                last_err = f"{type(e).__name__}: {e}"
+                last_err = self._safe_error(f"{type(e).__name__}: {e}")
                 _sleep_backoff(attempt)
 
         raise LLMCallError(f"重试 {self.max_retries} 次后仍失败：{last_err}")
@@ -187,6 +207,13 @@ class _HTTPClient(BaseClient):
 
 class OpenAICompatibleClient(_HTTPClient):
     provider = "openai_compatible"
+
+    def __init__(self, *args, provider_name: str = "openai", thinking_mode: str = "disabled", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.provider = provider_name
+        if thinking_mode not in {"enabled", "disabled"}:
+            raise LLMCallError("LLM_THINKING_MODE 只能是 enabled 或 disabled")
+        self.thinking_mode = thinking_mode
 
     def _build(self, system, user, model, json_schema):
         body: Dict[str, Any] = {
@@ -196,10 +223,13 @@ class OpenAICompatibleClient(_HTTPClient):
                 {"role": "user", "content": user},
             ],
             "temperature": 0,
+            "max_tokens": self.max_output_tokens,
         }
         if json_schema:
             # 让服务端也约束一道格式，能显著降低回灌重试的次数
             body["response_format"] = {"type": "json_object"}
+        if self.provider == "deepseek":
+            body["thinking"] = {"type": self.thinking_mode}
         headers = {"Authorization": f"Bearer {self.api_key}"}
         return f"{self.base_url}/chat/completions", headers, body
 
@@ -252,6 +282,7 @@ def get_client(settings) -> BaseClient:
             settings.llm_base_url or _ANTHROPIC_BASE,
             settings.llm_timeout_seconds,
             settings.llm_max_retries,
+            settings.llm_max_output_tokens,
         )
     if provider in _OPENAI_COMPATIBLE_BASES:
         return OpenAICompatibleClient(
@@ -259,6 +290,9 @@ def get_client(settings) -> BaseClient:
             settings.llm_base_url or _OPENAI_COMPATIBLE_BASES[provider],
             settings.llm_timeout_seconds,
             settings.llm_max_retries,
+            settings.llm_max_output_tokens,
+            provider_name=provider,
+            thinking_mode=settings.llm_thinking_mode,
         )
     raise LLMCallError(
         f"未知 provider: {provider}。可选：mock / anthropic / "
