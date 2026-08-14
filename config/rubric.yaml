@@ -1,0 +1,61 @@
+# Checker 校准维度定义。
+# 维度命名沿用需求原词（数据准确性 / 归因错误），便于逐条对照验收。
+# 本文件是文档，规则实现在 src/checker/rules/，两者的 issue_code 必须对得上。
+
+dimensions:
+  数据准确性:
+    description: 抽取与判定的内容本身是否正确、自洽、完整
+    detector: rule
+    issue_codes:
+      EXT_EMPTY_RESULT:       { severity: blocker, desc: 提取结果四类信息全空 }
+      EXT_FIELD_MISSING:      { severity: minor,   desc: 关键字段缺失（如姓名） }
+      EXT_DATE_CONFLICT:      { severity: major,   desc: 起止时间矛盾 }
+      MATCH_VERDICT_MISSING:  { severity: blocker, desc: 要求项漏判 }
+      MATCH_VERDICT_UNKNOWN_ID: { severity: major, desc: 判定引用了不存在的要求项 }
+      MATCH_SCORE_SATISFIED_MISMATCH: { severity: major, desc: 分数与判定档位不一致 }
+      MATCH_ARITHMETIC_MISMATCH: { severity: blocker, desc: 总分无法由分项重算得出 }
+
+  归因错误:
+    description: 结论是否真的有原文支撑。用逐字核对拦截幻觉，不问模型「你确定吗」
+    detector: rule
+    issue_codes:
+      EXT_SPAN_NOT_FOUND:     { severity: blocker, desc: 简历提取的出处在原文中不存在 }
+      MATCH_EVIDENCE_EMPTY:   { severity: blocker, desc: 判定为满足但无任何出处 }
+      MATCH_EVIDENCE_INVALID: { severity: blocker, desc: 匹配判定的出处在原文中不存在 }
+      Q_EVIDENCE_INVALID:     { severity: blocker, desc: 题目所依据的出处不存在 }
+      FU_SPAN_NOT_FOUND:      { severity: blocker, desc: 模糊点的出处不存在 }
+      EVIDENCE_TOO_SHORT:     { severity: minor,   desc: 出处过短，不足以支撑结论 }
+
+  格式与约束:
+    description: 数量、结构、引用完整性
+    detector: rule
+    issue_codes:
+      Q_COUNT_LT_MIN:         { severity: blocker, desc: 题目数量不足 }
+      Q_RUBRIC_MISSING:       { severity: major,   desc: 评分标准档位不足 }
+      FU_COUNT_OUT_OF_RANGE:  { severity: major,   desc: 追问数量超出区间 }
+      FU_DANGLING_POINT_REF:  { severity: major,   desc: 追问引用了不存在的模糊点 }
+      RULE_CRASHED:           { severity: minor,   desc: 某条规则执行异常 }
+
+  题目质量:
+    description: 题目是否有区分度、是否重复
+    detector: rule / sim
+    issue_codes:
+      Q_DUPLICATE:            { severity: major,   desc: 题干高度相似，重复考察 }
+      # 以下由 L2 三人格模拟产出
+      Q_NO_DISCRIMINATION:    { severity: major,   desc: 背题党也能答出，无区分度 }
+      Q_UNANSWERABLE:         { severity: major,   desc: 理想专家也答不出，题目本身有问题 }
+
+  语义一致性:
+    description: 前四类规则判不了时才调 LLM
+    detector: llm
+    issue_codes:
+      SEM_REASON_CONTRADICTS_EVIDENCE: { severity: major, desc: 理由与所引证据自相矛盾 }
+
+# 通过 / 不通过规则，实现在 src/checker/gate.py。
+# 判定顺序不可调换：熔断必须排在 FAIL 之前，否则会永远 FAIL 下去。
+gate:
+  - { order: 1, condition: blocker > 0 且 已修订轮数 >= max_rounds, status: NEEDS_HUMAN_REVIEW }
+  - { order: 2, condition: blocker > 0,          status: FAIL }
+  - { order: 3, condition: major >= max_major,   status: FAIL }
+  - { order: 4, condition: major >= 1,           status: CONDITIONAL_PASS }
+  - { order: 5, condition: 其余,                  status: PASS }

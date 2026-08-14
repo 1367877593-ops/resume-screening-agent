@@ -22,7 +22,9 @@ followup:
 evidence:
   # span 在原文中的模糊匹配阈值，低于此值判定为「查无此出处」
   min_similarity: 0.80
-  min_span_length: 4    # 过短的 span 不具备归因意义
+  # 过短的 span 不具备归因意义：「Python」这类词在任何简历里都能匹配上。
+  # 取 8 是为了和 prompt 里「引用 10-60 字」的要求呼应，留一点余量给标点差异。
+  min_span_length: 8
 
 simulation:
   expert_pass: 70.0     # 理想专家低于此分 -> 题目本身有问题
