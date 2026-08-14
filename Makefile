@@ -1,4 +1,4 @@
-.PHONY: install test demo run eval clean
+.PHONY: install test demo demo-cache run eval clean
 
 PY  := .venv/bin/python
 PIP := .venv/bin/pip
@@ -13,13 +13,16 @@ install: .venv
 test: .venv
 	$(PY) -m pytest tests/ -q
 
-# 无 Key 回放。app/main.py 属于 L1 阶段 5，尚未实现时给出明确提示而不是一串堆栈
+# 无 Key 回放：固定使用 data/demo_cache/，不初始化真实模型客户端
 demo: .venv
-	@test -f app/main.py || { echo "app/main.py 尚未实现（L1 阶段 5）。当前可运行：make test"; exit 1; }
 	DEMO_MODE=1 $(PY) -m streamlit run app/main.py
 
+# 样例、Prompt 或 Schema 变化后重建内置回放，并立即跑回归测试
+demo-cache: .venv
+	$(PY) scripts/generate_demo_cache.py
+	$(PY) -m pytest tests/test_demo_replay.py -q
+
 run: .venv
-	@test -f app/main.py || { echo "app/main.py 尚未实现（L1 阶段 5）。当前可运行：make test"; exit 1; }
 	$(PY) -m streamlit run app/main.py
 
 eval: .venv

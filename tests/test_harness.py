@@ -193,3 +193,37 @@ def test_demo_mode_raises_on_cache_miss(monkeypatch, tmp_path):
 
     assert client.calls == []                  # 一次真实调用都没发生
     assert "DEMO_MODE" in str(exc.value)
+
+
+def test_demo_cache_hit_does_not_initialize_live_provider(monkeypatch, tmp_path):
+    """回放应独立于本机 .env；有缓存时连真实客户端都不该构造。"""
+    from config.settings import get_settings
+    from harness import structured
+
+    demo_client = StubClient(['{"name": "张三", "score": 88}'])
+    demo_client.provider = "demo"
+
+    # 先按与正式 Demo 相同的 provider/model/prompt 生成一条缓存。
+    _call(monkeypatch, tmp_path, demo_client, llm_model="demo-v1")
+    (tmp_path / "demo").mkdir()
+    for path in (tmp_path / "cache").glob("*.json"):
+        path.replace(tmp_path / "demo" / path.name)
+
+    get_settings.cache_clear()
+    settings = get_settings()
+    monkeypatch.setattr(settings, "cache_dir", tmp_path / "cache", raising=False)
+    monkeypatch.setattr(settings, "demo_cache_dir", tmp_path / "demo", raising=False)
+    monkeypatch.setattr(settings, "demo_mode", True, raising=False)
+    monkeypatch.setattr(
+        structured,
+        "get_client",
+        lambda _settings: (_ for _ in ()).throw(AssertionError("不应初始化真实客户端")),
+    )
+
+    obj = structured.call_structured(
+        "extract",
+        {"resume_text": "张三，三年 Python 经验", "doc_id": "d1"},
+        Toy,
+        tracer=Tracer(tmp_path / "demo-traces"),
+    )
+    assert obj.name == "张三"

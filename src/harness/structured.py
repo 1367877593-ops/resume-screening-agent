@@ -117,8 +117,19 @@ def call_structured(
 ) -> T:
     settings = get_settings()
     tracer = tracer or get_tracer()
-    client = client or get_client(settings)
-    model = model or settings.llm_model
+    model = model or (
+        "demo-v1" if settings.demo_mode and client is None else settings.llm_model
+    )
+
+    # Demo 回放在读取缓存前不应初始化真实厂商客户端。否则用户的 .env 即使
+    # 配了 provider、但没有 Key，`make demo` 也会在命中缓存之前先报鉴权错。
+    # 无显式 client 的 Demo 统一使用稳定的 `demo` 命名空间，使回放结果不受
+    # 本机 LLM_PROVIDER 影响；缓存未命中时仍会在下方响亮失败，绝不发请求。
+    if client is None and settings.demo_mode:
+        provider = "demo"
+    else:
+        client = client or get_client(settings)
+        provider = client.provider
 
     tpl = load_prompt(prompt_name)
     schema = output_model.model_json_schema()
@@ -132,7 +143,7 @@ def call_structured(
     )
     key = make_key(
         {
-            "provider": client.provider,
+            "provider": provider,
             "model": model,
             "prompt": prompt_name,
             "version": tpl.version,
@@ -146,7 +157,7 @@ def call_structured(
         obj = output_model.model_validate_json(cached)
         tracer.record(
             event="structured_call", prompt=prompt_name, prompt_version=tpl.version,
-            model=model, provider=client.provider, cache_hit=True, ok=True,
+            model=model, provider=provider, cache_hit=True, ok=True,
             repair_attempts=0, cache_key=key,
         )
         return obj
@@ -162,6 +173,9 @@ def call_structured(
     last_error = ""
     current_user = user
 
+    # 到这里必然不是无 client 的 Demo 模式：该模式在缓存未命中时已抛错。
+    assert client is not None
+
     for repair_attempt in range(max_repair + 1):
         resp = client.complete(_SYSTEM, current_user, model, json_schema=schema)
         raw = extract_json(resp.text)
@@ -171,7 +185,7 @@ def call_structured(
             last_error = str(e)[:1500]
             tracer.record(
                 event="structured_call", prompt=prompt_name, prompt_version=tpl.version,
-                model=model, provider=client.provider, cache_hit=False, ok=False,
+                model=model, provider=provider, cache_hit=False, ok=False,
                 repair_attempts=repair_attempt, error=last_error[:500],
                 prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
                 latency_ms=resp.latency_ms, http_attempts=resp.attempts, cache_key=key,
@@ -188,7 +202,7 @@ def call_structured(
 
         tracer.record(
             event="structured_call", prompt=prompt_name, prompt_version=tpl.version,
-            model=model, provider=client.provider, cache_hit=False, ok=True,
+            model=model, provider=provider, cache_hit=False, ok=True,
             repair_attempts=repair_attempt,
             prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
             latency_ms=resp.latency_ms, http_attempts=resp.attempts, cache_key=key,
