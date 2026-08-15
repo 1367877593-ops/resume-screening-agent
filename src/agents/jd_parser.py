@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from harness.structured import call_structured
 from pydantic import BaseModel, Field
@@ -17,8 +17,10 @@ class _ParsedJD(BaseModel):
     requirements: List[Requirement] = Field(default_factory=list)
 
 
-def parse_jd(doc: RawDoc) -> JD:
-    parsed = call_structured("jd_parse", {"jd_text": doc.full_text}, _ParsedJD)
+def parse_jd(doc: RawDoc, model: Optional[str] = None) -> JD:
+    parsed = call_structured(
+        "jd_parse", {"jd_text": doc.full_text}, _ParsedJD, model=model
+    )
     return JD(
         jd_id=doc.doc_id,
         title=parsed.title,

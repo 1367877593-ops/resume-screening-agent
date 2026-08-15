@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 
 import streamlit as st
 
@@ -11,15 +11,31 @@ from views._shared import candidate_picker, quote_block
 DIFF = {"EASY": "🟢 简单", "MEDIUM": "🟡 中等", "HARD": "🔴 困难"}
 
 
-def render(payload: Dict[str, Any]) -> None:
+def render(
+    payload: Dict[str, Any],
+    on_generate: Optional[Callable[[str], None]] = None,
+) -> None:
     rid = candidate_picker(payload, key="q_pick")
     if not rid:
         return
 
     data = payload["candidates"][rid]
     if not data["questions"]:
+        recommendation = data["match"]["recommendation"]
+        if recommendation in {"ADVANCE", "HOLD"} and on_generate is not None:
+            candidate_name = data["resume"].get("candidate_name") or data["filename"]
+            st.info(
+                "排名与匹配已经完成。为缩短首次等待时间，面试题和追问改为按需生成。"
+            )
+            if st.button(
+                f"为 {candidate_name} 生成面试题与追问",
+                type="primary",
+                key=f"generate_interview_{rid}",
+            ):
+                on_generate(rid)
+            return
         st.warning(
-            f"该候选人的建议是「{data['match']['recommendation']}」，未生成试题。\n\n"
+            f"该候选人的建议是「{recommendation}」，未生成试题。\n\n"
             "只为值得面试的候选人出题：既符合业务逻辑，也把模型调用量压下来一大截。"
         )
         return

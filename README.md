@@ -41,7 +41,10 @@ make run
 
 默认实时模型为官方标识 `deepseek-v4-pro`，接口地址为
 `https://api.deepseek.com`。结构化任务默认关闭 thinking，并把单次响应限制在
-8192 tokens，以减少延迟并给费用设置硬上限。项目仍支持 OpenAI / Claude /
+8192 tokens，以减少延迟并给费用设置硬上限。实时筛选采用混合模型：JD 拆解、
+简历提取、面试题和追问先走 `deepseek-v4-flash`，关键匹配判断与 Checker 修订
+保留 `deepseek-v4-pro`；候选人最多两路并行。首次筛选只返回排名与匹配详情，
+面试题在结果页按候选人生成，避免为暂时不查看的人提前等待和付费。项目仍支持 OpenAI / Claude /
 DeepSeek / Qwen / Kimi，在 `.env` 里切换 `LLM_PROVIDER`，业务代码无感知
 （见下文 Harness 层）。
 
@@ -101,7 +104,7 @@ flowchart TD
     H --> G
     G -->|PASS| I["纯代码：加权 → 排序 → 推进决策"]
     I -->|REJECT| N["结构化决策建议"]
-    I -->|ADVANCE / HOLD| J["≥10 道试题 + 3-5 追问"]
+    I -->|ADVANCE / HOLD，按需| J["≥10 道试题 + 3-5 追问"]
     J --> K["三人格盲评模拟"]
     K --> L{"Checker：题目诊断"}
     L -->|FAIL| M["修订 → 增量重跑"]
@@ -230,7 +233,7 @@ Prompt 文件都带 `version`。实质性修改时先归档旧版本再升级 ve
 
 阶段 5 完成时的可复现验收结果：
 
-- `make test`：**96 项全部通过**，覆盖 Harness、缓存、Gate/修订循环、代码算分、
+- `make test`：**104 项全部通过**，覆盖 Harness、缓存、Gate/修订循环、代码算分、
   排序、SQLite、API 序列化以及内置 Demo 端到端回放。
 - Demo：2 份样例简历，李明 95.0 分推进面试，王芳因三项硬性要求不满足而淘汰。
 - 推进候选人：10 道题、3 个追问；题目阶段由 9 道触发一次规则修订，复检后通过。

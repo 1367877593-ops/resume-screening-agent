@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import json
-from typing import List, Tuple, Type, TypeVar
+from typing import List, Optional, Tuple, Type, TypeVar
 
 from pydantic import BaseModel, Field, create_model
 
@@ -57,7 +57,12 @@ def _issues_payload(issues: List[Issue]) -> str:
     )
 
 
-def revise(target: T, issues: List[Issue], source_text: str = "") -> Tuple[T, List[RevisionNote]]:
+def revise(
+    target: T,
+    issues: List[Issue],
+    source_text: str = "",
+    model: Optional[str] = None,
+) -> Tuple[T, List[RevisionNote]]:
     """按问题清单修订对象。返回 (修订后的对象, 修订说明)。"""
     if isinstance(target, MatchResult):
         raise ValueError(
@@ -79,5 +84,6 @@ def revise(target: T, issues: List[Issue], source_text: str = "") -> Tuple[T, Li
             "source_text": source_text or "（本次修订不涉及原文核对）",
         },
         wrapper,
+        model=model,
     )
     return result.revised, result.notes

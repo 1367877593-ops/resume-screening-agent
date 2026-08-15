@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,7 +17,9 @@ class _GeneratedFollowUps(BaseModel):
     questions: List[FollowUpQuestion] = Field(default_factory=list)
 
 
-def generate_followups(resume_doc: RawDoc) -> FollowUpSet:
+def generate_followups(
+    resume_doc: RawDoc, model: Optional[str] = None
+) -> FollowUpSet:
     t = get_thresholds()["followup"]
     generated = call_structured(
         "followup",
@@ -28,6 +30,7 @@ def generate_followups(resume_doc: RawDoc) -> FollowUpSet:
             "max_count": t["max_count"],
         },
         _GeneratedFollowUps,
+        model=model,
     )
     return FollowUpSet(
         resume_id=resume_doc.doc_id,

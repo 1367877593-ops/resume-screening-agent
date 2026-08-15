@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from typing import Optional
 
 from harness.structured import call_structured
 from schema.document import RawDoc
@@ -17,7 +18,12 @@ from schema.resume import ExtractedResume
 from agents.scorer import build_match_result
 
 
-def match(jd: JD, resume: ExtractedResume, resume_doc: RawDoc) -> MatchResult:
+def match(
+    jd: JD,
+    resume: ExtractedResume,
+    resume_doc: RawDoc,
+    model: Optional[str] = None,
+) -> MatchResult:
     requirements = json.dumps(
         [
             {"requirement_id": r.requirement_id, "text": r.text, "is_hard": r.is_hard}
@@ -35,6 +41,7 @@ def match(jd: JD, resume: ExtractedResume, resume_doc: RawDoc) -> MatchResult:
             "doc_id": resume_doc.doc_id,
         },
         MatchVerdicts,
+        model=model,
     )
     # 组装（加权、卡阈值、拼理由）全部在 scorer 里，此处不做任何判定
     return build_match_result(

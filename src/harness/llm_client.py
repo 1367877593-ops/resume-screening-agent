@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import random
+import threading
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -159,6 +161,26 @@ class _HTTPClient(BaseClient):
         self.timeout = timeout
         self.max_retries = max_retries
         self.max_output_tokens = max_output_tokens
+        # 每个工作线程复用自己的连接池。候选人可并行，而单个候选人的多阶段
+        # 调用可以省掉重复 TLS 握手；某条连接坏掉时只重建当前线程的客户端。
+        self._local = threading.local()
+
+    def _client(self) -> httpx.Client:
+        client = getattr(self._local, "client", None)
+        if client is None or client.is_closed:
+            client = httpx.Client(
+                timeout=httpx.Timeout(self.timeout),
+                limits=httpx.Limits(max_keepalive_connections=4, max_connections=8),
+            )
+            self._local.client = client
+        return client
+
+    def _reset_client(self) -> None:
+        """丢弃发生传输错误的连接池，下一次重试建立全新 TLS 连接。"""
+        client = getattr(self._local, "client", None)
+        if client is not None:
+            client.close()
+        self._local.client = None
 
     def _safe_error(self, value: Any) -> str:
         """错误信息在进入 UI 或日志前移除密钥，防止上游意外回显。"""
@@ -177,8 +199,7 @@ class _HTTPClient(BaseClient):
 
         for attempt in range(self.max_retries):
             try:
-                with httpx.Client(timeout=self.timeout) as client:
-                    resp = client.post(url, headers=headers, json=body)
+                resp = self._client().post(url, headers=headers, json=body)
                 if resp.status_code in _RETRYABLE_STATUS:
                     last_err = self._safe_error(f"HTTP {resp.status_code}: {resp.text[:200]}")
                     _sleep_backoff(attempt)
@@ -207,6 +228,7 @@ class _HTTPClient(BaseClient):
                 )
             except (httpx.TimeoutException, httpx.TransportError) as e:
                 last_err = self._safe_error(f"{type(e).__name__}: {e}")
+                self._reset_client()
                 _sleep_backoff(attempt)
 
         raise LLMCallError(f"重试 {self.max_retries} 次后仍失败：{last_err}")
@@ -277,6 +299,40 @@ class AnthropicClient(_HTTPClient):
         )
 
 
+@lru_cache(maxsize=8)
+def _cached_openai_client(
+    provider: str,
+    api_key: str,
+    base_url: str,
+    timeout: int,
+    max_retries: int,
+    max_output_tokens: int,
+    thinking_mode: str,
+) -> OpenAICompatibleClient:
+    return OpenAICompatibleClient(
+        api_key,
+        base_url,
+        timeout,
+        max_retries,
+        max_output_tokens,
+        provider_name=provider,
+        thinking_mode=thinking_mode,
+    )
+
+
+@lru_cache(maxsize=4)
+def _cached_anthropic_client(
+    api_key: str,
+    base_url: str,
+    timeout: int,
+    max_retries: int,
+    max_output_tokens: int,
+) -> AnthropicClient:
+    return AnthropicClient(
+        api_key, base_url, timeout, max_retries, max_output_tokens
+    )
+
+
 def get_client(settings) -> BaseClient:
     """按 LLM_PROVIDER 选择实现。业务代码永远不该调这个函数之外的东西。"""
     provider = (settings.llm_provider or "mock").lower()
@@ -284,7 +340,7 @@ def get_client(settings) -> BaseClient:
     if provider == "mock":
         return MockClient()
     if provider == "anthropic":
-        return AnthropicClient(
+        return _cached_anthropic_client(
             settings.llm_api_key,
             settings.llm_base_url or _ANTHROPIC_BASE,
             settings.llm_timeout_seconds,
@@ -292,14 +348,14 @@ def get_client(settings) -> BaseClient:
             settings.llm_max_output_tokens,
         )
     if provider in _OPENAI_COMPATIBLE_BASES:
-        return OpenAICompatibleClient(
+        return _cached_openai_client(
+            provider,
             settings.llm_api_key,
             settings.llm_base_url or _OPENAI_COMPATIBLE_BASES[provider],
             settings.llm_timeout_seconds,
             settings.llm_max_retries,
             settings.llm_max_output_tokens,
-            provider_name=provider,
-            thinking_mode=settings.llm_thinking_mode,
+            settings.llm_thinking_mode,
         )
     raise LLMCallError(
         f"未知 provider: {provider}。可选：mock / anthropic / "

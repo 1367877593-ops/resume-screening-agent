@@ -98,9 +98,11 @@ class QueueClient:
     def __init__(self, payloads: List[dict]) -> None:
         self.queue = [json.dumps(p, ensure_ascii=False) for p in payloads]
         self.calls = 0
+        self.models: List[str] = []
 
     def complete(self, system, user, model, json_schema=None):
         self.calls += 1
+        self.models.append(model)
         if not self.queue:
             raise AssertionError(f"脚本用尽，出现了第 {self.calls} 次预期外的调用")
         return LLMResponse(text=self.queue.pop(0), model="queued", provider="queued")
@@ -178,6 +180,41 @@ def test_full_l1_pipeline_and_payload_shape(wired):
     assert len(cand["followups"]["questions"]) == 3
     assert [s["stage"] for s in cand["stages"]] == ["extract", "match", "question_set", "followup"]
     assert all(s["gate"]["status"] == "PASS" for s in cand["stages"])
+
+
+def test_fast_screening_defers_interview_and_routes_models(wired):
+    """实时 UI 先出排名；简单阶段走 Flash，关键匹配保留 Pro。"""
+    from config.settings import get_settings
+
+    client = wired([_jd(), _resume(), _verdicts(), _questions(), _followups()])
+    settings = get_settings()
+    result = api.run(
+        "岗位：AI 产品实习生\n要求：本科、熟悉 Python",
+        [("resume_a.txt", RESUME_TEXT.encode())],
+        generate_interview=False,
+    )
+    candidate = result.candidates[0]
+
+    assert client.calls == 3
+    assert client.models == [
+        settings.llm_model_cheap,
+        settings.llm_model_cheap,
+        settings.llm_model,
+    ]
+    assert candidate.question_set is None and candidate.followups is None
+    assert [s.stage for s in candidate.stages] == ["extract", "match"]
+
+    run_id = api.persist(result)
+    api.generate_interview(result, candidate.resume_id)
+    api.persist(result, run_id=run_id)
+
+    assert client.calls == 5
+    assert client.models[-2:] == [settings.llm_model_cheap, settings.llm_model_cheap]
+    assert candidate.question_set is not None and candidate.followups is not None
+    assert [s.stage for s in candidate.stages] == [
+        "extract", "match", "question_set", "followup"
+    ]
+    assert len([r for r in api.history() if r["run_id"] == run_id]) == 1
 
 
 def test_payload_contains_every_key_the_views_read(wired):

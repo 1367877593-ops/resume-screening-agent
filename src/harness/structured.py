@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 
 from config.settings import ROOT, get_settings
 from harness.cache import Cache, make_key
-from harness.errors import CacheMissError, StructuredOutputError
+from harness.errors import CacheMissError, LLMCallError, StructuredOutputError
 from harness.llm_client import BaseClient, get_client
 from harness.trace import Tracer
 
@@ -177,7 +177,18 @@ def call_structured(
     assert client is not None
 
     for repair_attempt in range(max_repair + 1):
-        resp = client.complete(_SYSTEM, current_user, model, json_schema=schema)
+        try:
+            resp = client.complete(_SYSTEM, current_user, model, json_schema=schema)
+        except LLMCallError as e:
+            # 传输层失败以前不会进入 trace，导致只能从 UI 猜是哪一步断了。
+            # 这里记录 Prompt 名与安全清洗后的错误，不记录输入正文或密钥。
+            tracer.record(
+                event="structured_call", prompt=prompt_name,
+                prompt_version=tpl.version, model=model, provider=provider,
+                cache_hit=False, ok=False, repair_attempts=repair_attempt,
+                error=str(e)[:500], cache_key=key,
+            )
+            raise
         raw = extract_json(resp.text)
         try:
             obj = output_model.model_validate_json(raw)

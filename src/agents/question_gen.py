@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -44,7 +44,10 @@ def _weak_points(jd: JD, match_result: MatchResult) -> str:
 
 
 def generate_questions(
-    jd: JD, match_result: MatchResult, resume_doc: RawDoc
+    jd: JD,
+    match_result: MatchResult,
+    resume_doc: RawDoc,
+    model: Optional[str] = None,
 ) -> QuestionSet:
     min_count = get_thresholds()["question"]["min_count"]
     requirements = json.dumps(
@@ -63,6 +66,7 @@ def generate_questions(
             "doc_id": resume_doc.doc_id,
         },
         _GeneratedQuestions,
+        model=model,
     )
     return QuestionSet(
         resume_id=match_result.resume_id,

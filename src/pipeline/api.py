@@ -19,7 +19,12 @@ from ingest.loader import load_file, load_text
 from schema.document import RawDoc
 from store.repository import list_runs, load_run, save_run
 
-from pipeline.orchestrator import CandidateOutcome, PipelineResult, run_pipeline
+from pipeline.orchestrator import (
+    CandidateOutcome,
+    PipelineResult,
+    generate_interviews,
+    run_pipeline,
+)
 
 SAMPLE_DIR = ROOT / "data" / "samples"
 
@@ -63,7 +68,11 @@ def _to_doc(upload: Upload) -> RawDoc:
     return doc.model_copy(update={"filename": name})
 
 
-def run(jd_text: str, resumes: Sequence[Upload]) -> PipelineResult:
+def run(
+    jd_text: str,
+    resumes: Sequence[Upload],
+    generate_interview: bool = True,
+) -> PipelineResult:
     settings = get_settings()
     if not jd_text.strip():
         raise ValueError("JD 不能为空")
@@ -78,7 +87,19 @@ def run(jd_text: str, resumes: Sequence[Upload]) -> PipelineResult:
     if total_bytes > max_bytes:
         raise ValueError(f"简历总大小不能超过 {settings.max_total_upload_mb} MB")
     jd_doc = load_text(jd_text, filename="jd")
-    return run_pipeline(jd_doc, [_to_doc(u) for u in resumes])
+    return run_pipeline(
+        jd_doc,
+        [_to_doc(u) for u in resumes],
+        include_interview=generate_interview,
+    )
+
+
+def generate_interview(result: PipelineResult, resume_id: str) -> PipelineResult:
+    """为快速筛选结果中的一名候选人按需补充题目与追问。"""
+    known = {o.resume_id for o in result.candidates}
+    if resume_id not in known:
+        raise ValueError("找不到对应候选人")
+    return generate_interviews(result, [resume_id])
 
 
 def access_control_required() -> bool:
@@ -135,8 +156,9 @@ def result_to_dict(result: PipelineResult, run_id: Optional[str] = None) -> Dict
     }
 
 
-def persist(result: PipelineResult) -> str:
-    return save_run(result_to_dict(result))
+def persist(result: PipelineResult, run_id: Optional[str] = None) -> str:
+    """保存或更新一次运行；按需出题后沿用原 run_id，不制造重复记录。"""
+    return save_run(result_to_dict(result, run_id=run_id))
 
 
 def history(limit: int = 20) -> List[Dict[str, Any]]:
@@ -167,8 +189,10 @@ def runtime_mode() -> Dict[str, Any]:
         "demo_mode": s.demo_mode,
         "provider": s.llm_provider,
         "model": s.llm_model,
+        "fast_model": s.llm_model_cheap,
         # UI 只得到布尔值，绝不接触密钥本身。
         "api_key_configured": bool(s.llm_api_key),
         "access_control": bool(s.app_access_code),
         "cache_enabled": s.cache_enabled,
+        "max_parallel_candidates": s.max_parallel_candidates,
     }

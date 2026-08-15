@@ -45,7 +45,10 @@ def sidebar() -> None:
         if mode["demo_mode"]:
             st.success("演示模式：回放内置缓存，不调用真实模型")
         else:
-            st.info(f"实时模式：{mode['provider']} / {mode['model']}")
+            st.info(
+                f"实时模式：关键判断 {mode['model']}\n\n"
+                f"快速阶段 {mode['fast_model']}"
+            )
             if mode["api_key_configured"]:
                 st.success("API Key：已安全加载（不会显示）")
             else:
@@ -65,6 +68,7 @@ def sidebar() -> None:
                 st.session_state.get("uploader_generation", 0) + 1
             )
             st.session_state.pop("result", None)
+            st.session_state.pop("result_obj", None)
             st.session_state.pop("error", None)
             if mode["demo_mode"]:
                 _run([])
@@ -108,16 +112,49 @@ def _run(uploaded) -> None:
         return
 
     try:
-        with st.spinner("解析中…提取、匹配、出题与校验会依次进行"):
-            result = api.run(jd_text, resumes)
+        mode = api.runtime_mode()
+        spinner_text = (
+            "正在运行内置完整 Demo…"
+            if mode["demo_mode"]
+            else f"快速筛选中…最多并行处理 {mode['max_parallel_candidates']} 位候选人"
+        )
+        with st.spinner(spinner_text):
+            # 实时模式先返回排名；昂贵的题目与追问由使用者在结果页按需生成。
+            # Demo 是缓存回放，继续一次展示完整流程。
+            result = api.run(
+                jd_text, resumes, generate_interview=mode["demo_mode"]
+            )
             # 页面展示与 SQLite 持久化必须使用同一个 run_id，便于后续回看 trace。
             run_id = api.persist(result)
             payload = api.result_to_dict(result, run_id=run_id)
+        st.session_state["result_obj"] = result
         st.session_state["result"] = payload
     except Exception as e:  # noqa: BLE001
         # 演示模式下缓存未命中是最常见的失败，给出可执行的下一步而不是一串堆栈
         st.session_state.pop("result", None)
+        st.session_state.pop("result_obj", None)
         st.session_state["error"] = f"{type(e).__name__}: {e}"
+
+
+def _generate_interview(resume_id: str) -> None:
+    """从已完成的快速筛选结果按需补齐面试材料。"""
+    result = st.session_state.get("result_obj")
+    payload = st.session_state.get("result")
+    if result is None or payload is None:
+        st.session_state["error"] = "当前筛选结果已失效，请重新点击「开始筛选」。"
+        st.rerun()
+
+    try:
+        with st.spinner("正在生成面试题与追问…Flash 首次生成，Checker 不通过时由 Pro 修订"):
+            result = api.generate_interview(result, resume_id)
+            run_id = api.persist(result, run_id=payload["run_id"])
+            payload = api.result_to_dict(result, run_id=run_id)
+        st.session_state["result_obj"] = result
+        st.session_state["result"] = payload
+    except Exception as e:  # noqa: BLE001
+        # 排名与匹配仍然有效，按需生成失败不应该清空整个批次。
+        st.session_state["error"] = f"面试材料生成失败：{type(e).__name__}: {e}"
+    st.rerun()
 
 
 def access_gate() -> None:
@@ -175,7 +212,7 @@ def main() -> None:
     with tabs[1]:
         match_view.render(payload)
     with tabs[2]:
-        question_view.render(payload)
+        question_view.render(payload, on_generate=_generate_interview)
     with tabs[3]:
         checker_view.render(payload)
     with tabs[4]:

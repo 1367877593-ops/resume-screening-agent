@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     # ---- 调用控制 ----
     llm_timeout_seconds: int = 60
     llm_max_retries: int = 3
+    # 候选人之间可以并行，但限制并发，避免瞬间放大 API 压力与失败重试。
+    max_parallel_candidates: int = 2
 
     def resolve(self, p: Path) -> Path:
         """相对路径一律相对仓库根目录，避免受启动目录影响。"""
