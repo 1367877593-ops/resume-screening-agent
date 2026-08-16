@@ -54,6 +54,8 @@ def sidebar() -> None:
             else:
                 st.warning("API Key：尚未配置")
         st.caption("缓存：" + ("开启" if mode["cache_enabled"] else "关闭"))
+        if not mode["persist_runs"]:
+            st.caption("存储：本次结果不落盘，关闭页面即清除")
 
         st.divider()
         st.subheader("输入")
@@ -216,7 +218,14 @@ def main() -> None:
     with tabs[3]:
         checker_view.render(payload)
     with tabs[4]:
-        trace_view.render(api.trace_stats(), api.trace_rows())
+        # 默认只看本次运行：混进历次运行会让「一次成功率」这类指标变成历史平均值，
+        # 每跑一次数字都不一样，看不出这次到底发生了什么。
+        all_runs = st.checkbox("统计全部历史运行", key="trace_all_runs")
+        rid = None if all_runs else payload["run_id"]
+        trace_view.render(
+            api.trace_stats(rid), api.trace_rows(run_id=rid),
+            scope="全部历史运行" if all_runs else f"本次运行（{payload['run_id']}）",
+        )
 
 
 main()

@@ -33,9 +33,11 @@ live-check: .venv
 run: .venv
 	$(PY) -m streamlit run app/main.py
 
+# 默认无 Key 回放。真实稳定性数字：RUNS=5 DEMO_MODE=0 make eval
+RUNS ?= 1
+DEMO_MODE ?= 1
 eval: .venv
-	@test -f eval/run_eval.py || { echo "eval/run_eval.py 属于 L3，尚未实现"; exit 1; }
-	$(PY) eval/run_eval.py
+	DEMO_MODE=$(DEMO_MODE) $(PY) eval/run_eval.py --runs $(RUNS)
 
 clean:
 	rm -rf data/runtime .pytest_cache

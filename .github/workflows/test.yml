@@ -1,0 +1,61 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 是 pyproject 声明的下限，3.12 是 Streamlit Community Cloud 的运行版本。
+        # 只测一个版本的话，另一端的语法或依赖问题会留到部署时才暴露。
+        python-version: ["3.9", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: 安装依赖
+        run: pip install -e ".[app,dev]"
+
+      - name: 跑测试
+        run: python -m pytest tests/ -q
+
+  demo-cache:
+    # 单独一个 job：内置 Demo 缓存必须与当前的 prompt 版本、Schema 和样例保持一致。
+    # 改了 prompt 却忘记重建缓存时，本地毫无察觉 —— 失败只发生在别人克隆之后。
+    # 这里重跑生成脚本并要求产出零 diff，把那次事故钉死在 CI 上。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: pip install -e ".[app,dev]"
+
+      - name: 重建内置 Demo 缓存
+        run: python scripts/generate_demo_cache.py
+
+      - name: 缓存必须与仓库中的一致
+        run: |
+          if ! git diff --quiet -- data/demo_cache; then
+            echo "::error::data/demo_cache 与当前 prompt/Schema/样例不一致。"
+            echo "本地执行 make demo-cache 并提交结果。"
+            git diff --stat -- data/demo_cache
+            exit 1
+          fi
+
+      - name: 无 Key 回放必须跑通
+        run: python -m pytest tests/test_demo_replay.py -q

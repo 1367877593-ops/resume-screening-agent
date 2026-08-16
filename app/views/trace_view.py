@@ -11,10 +11,12 @@ def _pct(v) -> str:
     return "—" if v is None else f"{v:.1%}"
 
 
-def render(stats: Dict[str, Any], rows: List[Dict[str, Any]]) -> None:
+def render(stats: Dict[str, Any], rows: List[Dict[str, Any]], scope: str = "本次运行") -> None:
     if not stats.get("calls"):
-        st.info("本次会话还没有调用记录。")
+        st.info(f"{scope}还没有调用记录。")
         return
+
+    st.caption(f"统计范围：**{scope}**")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("总调用", stats["calls"])
