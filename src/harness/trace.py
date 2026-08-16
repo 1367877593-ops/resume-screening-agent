@@ -8,37 +8,59 @@ README 里那些「结构化输出一次成功率」「规则 vs LLM 检出占�
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
+def new_run_id() -> str:
+    return time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+
+
 class Tracer:
-    """一次运行对应一个 JSONL 文件，每次 LLM 调用追加一行。"""
+    """一次运行对应一个 JSONL 文件，每次 LLM 调用追加一行。
+
+    每条记录都带 `run_id`。这个字段不是冗余：统计口径必须是「这一次运行」，
+    读整个目录算出来的是历史平均值 —— 跑第二次 Demo 时「一次成功率」会莫名其妙
+    变化，而那只是把上一次的记录也算进去了。
+    """
 
     def __init__(self, trace_dir: Path, run_id: Optional[str] = None) -> None:
-        self.run_id = run_id or time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+        self.run_id = run_id or new_run_id()
         self.trace_dir = Path(trace_dir)
         self.trace_dir.mkdir(parents=True, exist_ok=True)
         self.path = self.trace_dir / f"{self.run_id}.jsonl"
+        # 候选人并行筛选时多个线程会同时落 trace。小行的 O_APPEND 写在多数平台上
+        # 不会撕裂，但这依赖平台行为；加锁的成本可以忽略，不值得赌。
+        self._lock = threading.Lock()
 
     def record(self, **fields: Any) -> None:
         fields.setdefault("ts", time.time())
         fields.setdefault("run_id", self.run_id)
-        with open(self.path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(fields, ensure_ascii=False) + "\n")
+        line = json.dumps(fields, ensure_ascii=False) + "\n"
+        with self._lock, open(self.path, "a", encoding="utf-8") as f:
+            f.write(line)
 
 
-def read_traces(trace_dir: Path) -> List[Dict[str, Any]]:
+def read_traces(trace_dir: Path, run_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """读取 trace。`run_id` 为 None 时返回全部历史。
+
+    过滤依据是记录里的 `run_id` 字段而不是文件名 —— 同一个进程里如果有两次运行
+    交错写入，按文件名过滤会把别人的记录算进来，按字段过滤不会。
+    """
     rows: List[Dict[str, Any]] = []
     for p in sorted(Path(trace_dir).glob("*.jsonl")):
         for line in p.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if run_id is None or row.get("run_id") == run_id:
+                rows.append(row)
     return rows
 
 

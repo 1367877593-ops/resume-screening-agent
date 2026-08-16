@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -54,8 +56,22 @@ class Cache:
         return None
 
     def put(self, key: str, value: str) -> None:
-        """只写 runtime 层。demo 层由 `make record-demo` 显式生成，不会被跑一次就污染。"""
+        """只写 runtime 层。demo 层由 `make demo-cache` 显式生成，不会被跑一次就污染。
+
+        写临时文件再 `os.replace` 原子替换，不直接写目标路径：候选人是并行筛选的，
+        两份内容相同的简历会算出同一个 key，两个线程同时写时，直接写会让另一个线程
+        读到只写了一半的 JSON。`os.replace` 在同一文件系统上是原子的，读到的要么是
+        旧内容要么是新内容，不会是半截。
+        """
         if self.demo_mode or not self.enabled:
             return
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        (self.runtime_dir / f"{key}.json").write_text(value, encoding="utf-8")
+        target = self.runtime_dir / f"{key}.json"
+        fd, tmp = tempfile.mkstemp(dir=self.runtime_dir, prefix=f".{key[:16]}-", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(value)
+            os.replace(tmp, target)
+        except BaseException:
+            Path(tmp).unlink(missing_ok=True)
+            raise

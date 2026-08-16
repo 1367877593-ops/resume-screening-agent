@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Type, TypeVar
@@ -96,14 +97,39 @@ def _build_user_message(body: str, schema: Dict[str, Any]) -> str:
 
 
 _default_tracer: Optional[Tracer] = None
+_tracer_lock = threading.Lock()
 
 
 def get_tracer() -> Tracer:
+    """进程内共享的 tracer。
+
+    双重检查加锁：候选人并行筛选时多个线程会同时走到这里，不加锁会创建出两个
+    Tracer、写出两个 trace 文件，同一次运行的统计就被劈成了两半。
+    """
     global _default_tracer
     if _default_tracer is None:
-        s = get_settings()
-        _default_tracer = Tracer(s.resolve(s.trace_dir))
+        with _tracer_lock:
+            if _default_tracer is None:
+                s = get_settings()
+                _default_tracer = Tracer(s.resolve(s.trace_dir))
     return _default_tracer
+
+
+def start_run(run_id: str) -> Tracer:
+    """把后续调用的 trace 归到指定 run_id 名下，由 `pipeline.api.run()` 在开跑前调用。
+
+    这样 trace 的 run_id 与落库 payload 的 run_id 是同一个，事后可以从一条历史记录
+    直接查到它当时发出的每一次调用。
+
+    已知局限：tracer 是进程级全局，同一进程里两次运行完全并发时，后启动的那次会
+    改写全局引用，先启动的剩余调用会被记到后者名下。单机与当前的 Streamlit 单会话
+    用法下不会发生；要彻底解决需要把 tracer 沿调用链显式传递。
+    """
+    global _default_tracer
+    s = get_settings()
+    with _tracer_lock:
+        _default_tracer = Tracer(s.resolve(s.trace_dir), run_id=run_id)
+        return _default_tracer
 
 
 def call_structured(

@@ -270,3 +270,90 @@ def test_demo_cache_hit_does_not_initialize_live_provider(monkeypatch, tmp_path)
         tracer=Tracer(tmp_path / "demo-traces"),
     )
     assert obj.name == "张三"
+
+
+# ============================================================ 并发与 trace 归属
+
+
+def test_cache_put_is_atomic_and_leaves_no_temp_files(tmp_path):
+    """候选人并行筛选时，两份内容相同的简历会算出同一个 key。
+
+    直接写目标路径的话，另一个线程可能读到只写了一半的 JSON。这里验证
+    落地的永远是完整内容，且不留临时文件。
+    """
+    from harness.cache import Cache
+
+    cache = Cache(runtime_dir=tmp_path / "rt", demo_dir=tmp_path / "demo")
+    cache.put("k", '{"a": 1}')
+    cache.put("k", '{"a": 2}')
+
+    assert cache.get("k") == '{"a": 2}'
+    assert list((tmp_path / "rt").glob("*.tmp")) == []
+    assert len(list((tmp_path / "rt").glob("*.json"))) == 1
+
+
+def test_concurrent_cache_writes_never_yield_torn_content(tmp_path):
+    """并发写同一个 key 时，读到的必须是某一个完整值，不能是半截。"""
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+
+    from harness.cache import Cache
+
+    cache = Cache(runtime_dir=tmp_path / "rt", demo_dir=tmp_path / "demo")
+    values = [json.dumps({"n": i, "pad": "x" * 5000}) for i in range(24)]
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(lambda v: cache.put("same-key", v), values))
+
+    assert json.loads(cache.get("same-key")) in [json.loads(v) for v in values]
+    assert list((tmp_path / "rt").glob("*.tmp")) == []
+
+
+def test_read_traces_filters_by_run_id(tmp_path):
+    """统计口径必须是「这一次运行」。
+
+    读整个目录算出来的是历次运行的平均值 —— 跑第二次 Demo 时「一次成功率」
+    会莫名其妙地变，而那只是把上一次的记录也算进来了。
+    """
+    from harness.trace import Tracer, read_traces, summarize
+
+    first = Tracer(tmp_path, run_id="run-a")
+    second = Tracer(tmp_path, run_id="run-b")
+    first.record(event="structured_call", ok=True, cache_hit=False, repair_attempts=0)
+    second.record(event="structured_call", ok=False, cache_hit=False, repair_attempts=2)
+    second.record(event="structured_call", ok=True, cache_hit=True, repair_attempts=0)
+
+    assert len(read_traces(tmp_path)) == 3
+    assert len(read_traces(tmp_path, run_id="run-a")) == 1
+    assert summarize(read_traces(tmp_path, run_id="run-a"))["first_try_success_rate"] == 1.0
+    assert summarize(read_traces(tmp_path, run_id="run-b"))["cache_hit_rate"] == 0.5
+
+
+def test_filtering_uses_the_record_field_not_the_filename(tmp_path):
+    """两次运行交错写进同一个文件时，按文件名过滤会把别人的记录算进来。"""
+    from harness.trace import Tracer, read_traces
+
+    shared = Tracer(tmp_path, run_id="run-a")
+    shared.record(event="structured_call", ok=True)
+    # 模拟另一次运行把记录写进了同一个文件
+    shared.record(event="structured_call", ok=True, run_id="run-b")
+
+    assert len(read_traces(tmp_path, run_id="run-a")) == 1
+    assert len(read_traces(tmp_path, run_id="run-b")) == 1
+
+
+def test_get_tracer_is_created_once_under_concurrency(monkeypatch, tmp_path):
+    """不加锁会创建出两个 Tracer、写两个文件，同一次运行的统计被劈成两半。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from config.settings import get_settings
+    from harness import structured
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(get_settings(), "trace_dir", tmp_path / "traces", raising=False)
+    monkeypatch.setattr(structured, "_default_tracer", None, raising=False)
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        tracers = list(ex.map(lambda _: structured.get_tracer(), range(32)))
+
+    assert len({id(t) for t in tracers}) == 1
