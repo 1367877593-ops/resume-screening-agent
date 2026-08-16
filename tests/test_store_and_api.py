@@ -116,13 +116,16 @@ def wired(monkeypatch, tmp_path):
     get_settings.cache_clear()
     s = get_settings()
     monkeypatch.setattr(s, "cache_dir", tmp_path / "cache", raising=False)
+    monkeypatch.setattr(s, "lessons_path", tmp_path / "lessons.jsonl", raising=False)
     monkeypatch.setattr(s, "demo_cache_dir", tmp_path / "demo", raising=False)
     monkeypatch.setattr(s, "trace_dir", tmp_path / "traces", raising=False)
     monkeypatch.setattr(s, "db_path", tmp_path / "app.db", raising=False)
     monkeypatch.setattr(structured, "_default_tracer", None, raising=False)
-    # 这一组测的是 L1 主干与 UI 数据契约。三人格盲评每轮多 4 次调用，
-    # 放进来只会让脚本变长而测不到新东西 —— L2 的覆盖在 test_simulation.py。
+    # 这一组测的是 L1 主干与 UI 数据契约。盲评每轮多 4 次调用、语义校验每人多
+    # 1 次，放进来只会让脚本变长而测不到新东西 —— 它们各自的覆盖在
+    # test_simulation.py 与 test_semantic.py。
     monkeypatch.setattr(s, "simulation_enabled", False, raising=False)
+    monkeypatch.setattr(s, "semantic_check_enabled", False, raising=False)
 
     def _wire(payloads):
         client = QueueClient(payloads)
@@ -238,7 +241,7 @@ def test_payload_contains_every_key_the_views_read(wired):
 
     cand = payload["candidates"][item["resume_id"]]
     assert {"resume", "resume_text", "filename", "match", "questions",
-            "followups", "simulation", "stages"} <= set(cand)
+            "followups", "simulation", "semantic", "stages"} <= set(cand)
     assert {"total_score", "verdicts", "recommendation",
             "recommendation_reason"} <= set(cand["match"])
     assert {"requirement_id", "satisfied", "score", "reason", "evidence"} <= set(

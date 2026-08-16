@@ -21,9 +21,12 @@ from agents.question_gen import generate_questions
 from agents.reviser import revise
 from agents.scorer import build_match_result, rank
 from checker.run import check_followups, check_match, check_question_set, check_resume
+from checker.semantic import check_match_semantics
 from checker.simulation import simulate_question_set
 from config.settings import get_settings, get_thresholds
+from flywheel import record
 from schema.document import RawDoc
+from schema.lesson import normalize_job_kind
 from schema.followup import FollowUpSet
 from schema.issue import CheckReport, GateResult, Issue
 from schema.jd import JD
@@ -32,6 +35,7 @@ from schema.question import QuestionSet
 from schema.ranking import CandidateRanking
 from schema.resume import ExtractedResume
 from schema.revision import RevisionNote
+from schema.semantic import SemanticReport
 from schema.simulation import SimulationReport
 
 
@@ -59,6 +63,7 @@ class CandidateOutcome:
     question_set: Optional[QuestionSet] = None
     followups: Optional[FollowUpSet] = None
     simulation: Optional[SimulationReport] = None
+    semantic: Optional[SemanticReport] = None
     stages: List[StageOutcome] = field(default_factory=list)
 
 
@@ -133,9 +138,10 @@ def _screen_candidate(
     )
 
     initial = match(jd, resume, doc, model=reasoning_model)
+    semantic_holder: Dict[str, Optional[SemanticReport]] = {"report": None}
     match_result, match_stage = _revise_loop(
         MatchVerdicts(verdicts=initial.verdicts),
-        lambda o, r, d=doc: check_match(jd, o, d, round_no=r),
+        _match_checker(jd, doc, semantic_holder, reasoning_model),
         stage="match",
         source_text=doc.full_text,
         max_rounds=max_rounds,
@@ -149,8 +155,38 @@ def _screen_candidate(
         resume_doc=doc,
         resume=resume,
         match_result=match_result,
+        semantic=semantic_holder["report"],
         stages=[resume_stage, match_stage],
     )
+
+
+def _match_checker(
+    jd: JD,
+    doc: RawDoc,
+    holder: Dict[str, Optional[SemanticReport]],
+    model: Optional[str],
+):
+    """构造匹配阶段的校验函数：确定性规则 -> （通过后）语义校验。
+
+    次序不能反。项目的核心主张之一是「能用规则判的绝不调 LLM」，而语义校验是
+    唯一违反直觉的一层 —— 它必须排在最后，且只在前面全过时才跑，否则这条主张
+    就只是口号。出现 blocker 时那批判定马上要被重写，对它做语义分析是纯浪费。
+    """
+
+    def check(match_result: MatchResult, round_no: int):
+        report, gate = check_match(jd, match_result, doc, round_no=round_no)
+
+        if not get_settings().semantic_check_enabled:
+            return report, gate
+        if report.count("blocker"):
+            return report, gate
+
+        holder["report"] = check_match_semantics(jd, match_result, model=model)
+        return check_match(
+            jd, match_result, doc, round_no=round_no, semantic=holder["report"]
+        )
+
+    return check
 
 
 def _question_checker(
@@ -291,4 +327,34 @@ def run_pipeline(
 
     ranking = rank(jd.jd_id, [o.match_result for o in outcomes])
     result = PipelineResult(jd=jd, candidates=outcomes, ranking=ranking)
-    return generate_interviews(result) if include_interview else result
+    if include_interview:
+        generate_interviews(result)
+    _write_lessons(result)
+    return result
+
+
+def _write_lessons(result: PipelineResult) -> None:
+    """把本次 Checker 检出的问题沉淀进经验库。
+
+    用 `detected`（各轮累计）而不是最后一轮的 report —— 被修好的问题恰恰是
+    最该记住的：这次靠修订补救了，下次应该一开始就不犯。
+
+    写入失败不应该让整条流水线失败：经验库是增强，不是主干。
+    """
+    if not get_settings().flywheel_enabled:
+        return
+
+    job_kind = normalize_job_kind(result.jd.title)
+    issues: List[Issue] = []
+    stage_of: Dict[str, str] = {}
+    for outcome in result.candidates:
+        for stage in outcome.stages:
+            for issue in stage.detected:
+                issues.append(issue)
+                stage_of.setdefault(issue.issue_code, stage.stage)
+    if not issues:
+        return
+    try:
+        record(job_kind, issues, stage_of)
+    except OSError:
+        pass

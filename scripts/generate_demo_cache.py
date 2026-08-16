@@ -12,6 +12,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 for path in (ROOT / "src", ROOT):
@@ -19,6 +20,7 @@ for path in (ROOT / "src", ROOT):
         sys.path.insert(0, str(path))
 
 from checker.simulation.grader import label_map  # noqa: E402
+from flywheel.lessons import load_all  # noqa: E402
 from config.settings import get_settings  # noqa: E402
 from harness import structured  # noqa: E402
 from harness.llm_client import LLMResponse  # noqa: E402
@@ -117,6 +119,135 @@ def resume_b_payload(doc_id: str) -> dict:
         "skills": [
             {"name": "Office", "level": "熟练", "evidence": [span(doc_id, "熟练使用 Office、剪映、Photoshop")]},
             {"name": "AI 工具", "evidence": [span(doc_id, "日常使用 ChatGPT、Midjourney")]},
+        ],
+    }
+
+
+def resume_c_payload(doc_id: str) -> dict:
+    """边缘候选人：硬性项全部踩线满足，软性项半数只能算部分满足。
+
+    加进内置样例是为了让 HOLD / PARTIAL / 超出射程这几档在 Demo 里真的出现 ——
+    只有「全 YES」和「全 NO」两个极端时，分档逻辑写了也演示不出来。
+    """
+    return {
+        "resume_id": doc_id,
+        "candidate_name": "陈涛",
+        "educations": [{
+            "school": "某理工大学", "degree": "本科", "major": "电子信息工程",
+            "start": "2022.09", "end": "2026.06",
+            "evidence": [span(doc_id, "2022.09 - 2026.06  某理工大学  电子信息工程  本科")],
+        }],
+        "work_experiences": [{
+            "company": "某制造业公司", "title": "数据分析实习生",
+            "start": "2025.07", "end": "2025.08",
+            "summary": "清洗产线质检数据并输出周报",
+            "evidence": [span(doc_id, "使用 Python 与 pandas 清洗产线质检数据，编写脚本把每日 3 万条记录汇总成周报")],
+        }],
+        "projects": [
+            {
+                "name": "校园二手交易平台", "role": "课程设计",
+                "description": "Django 后端，MySQL 存储",
+                "tech_stack": ["Python", "Django", "MySQL"],
+                "evidence": [span(doc_id, "使用 Django 搭建后端，实现商品发布、搜索和站内信功能")],
+            },
+            {
+                "name": "产线异常检测脚本", "description": "阈值规则告警",
+                "tech_stack": ["Python"],
+                "evidence": [span(doc_id, "用 Python 编写规则引擎，对传感器读数做阈值告警")],
+            },
+        ],
+        "skills": [
+            {"name": "Python", "level": "熟悉",
+             "evidence": [span(doc_id, "熟悉 Python，掌握 pandas、numpy、matplotlib")]},
+            {"name": "SQL", "evidence": [span(doc_id, "了解 SQL 与 Django，能独立完成数据处理脚本")]},
+        ],
+    }
+
+
+def match_c_payload(doc_id: str) -> dict:
+    """三项硬性要求踩线满足，因此不会一票否决；软性项拉低总分到 HOLD 区间。"""
+    ev = {
+        "edu": "2022.09 - 2026.06  某理工大学  电子信息工程  本科",
+        "python": "熟悉 Python，掌握 pandas、numpy、matplotlib",
+        "clean": "使用 Python 与 pandas 清洗产线质检数据，编写脚本把每日 3 万条记录汇总成周报",
+        "ml": "在机器学习导论课上系统学习过神经网络与注意力机制的基本原理，但没有在项目中实践过",
+        "chatgpt": "尝试过用 ChatGPT 辅助生成正则表达式和 SQL，但没有做过多版对比或效果评估",
+        "doc": "独立撰写了一份 12 页的数据口径说明文档，被团队用作后续交接材料",
+        "avail": "每周可到岗 4 天，实习期可保证 3 个月",
+    }
+    rows = [
+        ("R1", "YES", 95, "本科在读，满足学历门槛", "edu"),
+        ("R2", "PARTIAL", 55, "电子信息工程与目标专业相关但不对口", "edu"),
+        ("R3", "YES", 80, "能用 pandas 独立完成数据清洗脚本", "clean"),
+        ("R4", "PARTIAL", 45, "课程层面了解原理，无工程实践", "ml"),
+        # 刻意埋的语义矛盾：理由说「有系统的多版迭代经验」，可它引用的那句原文
+        # 恰恰写着「没有做过多版对比或效果评估」。引用逐字存在，归因规则查不出来，
+        # 只有语义校验能看出证据撑不起结论 —— 这正是 detector=llm 存在的理由。
+        ("R5", "PARTIAL", 40, "有系统的 Prompt 多版迭代与效果评估经验", "chatgpt"),
+        ("R6", "NO", 10, "没有结构化输出、RAG 或 Agent 项目", None),
+        ("R7", "YES", 85, "独立撰写过被团队复用的口径文档", "doc"),
+        ("R8", "YES", 100, "每周可到岗 4 天，恰好满足", "avail"),
+        ("R9", "YES", 100, "实习期可保证 3 个月，恰好满足", "avail"),
+        ("R10", "NO", 0, "明确未使用过向量数据库", None),
+        ("R11", "NO", 0, "暂无开源项目与技术博客", None),
+    ]
+    return {"verdicts": [
+        {"requirement_id": rid, "satisfied": st, "score": sc, "reason": rs,
+         "evidence": [span(doc_id, ev[k])] if k else []}
+        for rid, st, sc, rs, k in rows
+    ]}
+
+
+def semantic_clean_payload() -> dict:
+    """未发现矛盾。零发现是常态，不是异常。"""
+    return {"findings": []}
+
+
+def semantic_c_payload() -> dict:
+    """语义校验抓出陈涛 R5 的理由与其所引证据自相矛盾。"""
+    return {"findings": [{
+        "requirement_id": "R5",
+        "explanation": "理由称有系统的多版迭代与效果评估，但所引原文明说「没有做过多版对比或效果评估」，证据与结论相反",
+        "quote": "尝试过用 ChatGPT 辅助生成正则表达式和 SQL，但没有做过多版对比或效果评估",
+    }]}
+
+
+
+def questions_c_payload(doc_id: str) -> dict:
+    cases = [
+        ("Q1", "每日 3 万条质检数据里，你定义的「脏数据」判据是什么？漏掉一条会怎样？", "数据口径定义", "MEDIUM", "R3", "使用 Python 与 pandas 清洗产线质检数据，编写脚本把每日 3 万条记录汇总成周报"),
+        ("Q2", "阈值告警的那个阈值是怎么定下来的？误报和漏报你更能接受哪一个，为什么？", "阈值取舍", "MEDIUM", "R3", "用 Python 编写规则引擎，对传感器读数做阈值告警"),
+        ("Q3", "那份 12 页口径文档里，你认为最容易被同事误解的是哪一条？你怎么写才避免的？", "技术表达", "EASY", "R7", "独立撰写了一份 12 页的数据口径说明文档，被团队用作后续交接材料"),
+        ("Q4", "生产部门真的按你的图表调整过排产吗？如果没有，你觉得卡在哪里？", "业务落地", "MEDIUM", "R7", "用 matplotlib 输出可视化图表，交付给生产部门作为排产参考"),
+        ("Q5", "你说没做多版对比 —— 如果现在让你验证 ChatGPT 生成的 SQL 是否可靠，你会怎么设计对照？", "实验设计", "HARD", "R5", "尝试过用 ChatGPT 辅助生成正则表达式和 SQL，但没有做过多版对比或效果评估"),
+        ("Q6", "注意力机制里 Q、K、V 各自解决什么问题？课程之外你自己验证过哪一部分？", "原理理解", "MEDIUM", "R4", "在机器学习导论课上系统学习过神经网络与注意力机制的基本原理，但没有在项目中实践过"),
+        ("Q7", "把每日汇总脚本交给别人跑，你会补哪些东西才敢交？", "工程化意识", "MEDIUM", "R3", "熟悉 Python，掌握 pandas、numpy、matplotlib"),
+        ("Q8", "二手交易平台的搜索功能，你用的是什么方案？数据量涨十倍会先垮在哪？", "系统设计", "MEDIUM", "R3", "使用 Django 搭建后端，实现商品发布、搜索和站内信功能"),
+        ("Q9", "如果把二手平台的搜索改成向量检索，你会怎样评估召回质量、怎样决定切块粒度？", "向量检索选型", "HARD", "R10", "数据库为 MySQL，没有使用过向量数据库"),
+        ("Q10", "规则引擎和模型方法，在你那个告警场景里你会怎么选？换成模型的前提条件是什么？", "方案选型判断", "HARD", "R4", "用 Python 编写规则引擎，对传感器读数做阈值告警"),
+    ]
+    return {"questions": [
+        {"question_id": qid, "text": text, "skill_point": skill, "difficulty": diff,
+         "rubric": rubric(), "source_requirement_ids": [req], "evidence": [span(doc_id, quote)]}
+        for qid, text, skill, diff, req, quote in cases
+    ]}
+
+
+def followups_c_payload(doc_id: str) -> dict:
+    points = [
+        ("P1", "「熟悉 Python」的深度缺少可核实的例子", "熟悉 Python，掌握 pandas、numpy、matplotlib"),
+        ("P2", "使用 ChatGPT 的方式停留在工具层，效果无验证", "尝试过用 ChatGPT 辅助生成正则表达式和 SQL，但没有做过多版对比或效果评估"),
+        ("P3", "实习期与到岗天数恰好踩线，需确认可持续性", "每周可到岗 4 天，实习期可保证 3 个月"),
+    ]
+    return {
+        "ambiguity_points": [
+            {"point_id": pid, "description": desc, "evidence": [span(doc_id, quote)]}
+            for pid, desc, quote in points
+        ],
+        "questions": [
+            {"followup_id": "F1", "text": "请举一个你写过的最复杂的 pandas 处理，说明为什么不能用更简单的写法。", "ambiguity_point_id": "P1", "intent": "确认 Python 能力的实际深度"},
+            {"followup_id": "F2", "text": "ChatGPT 生成的 SQL 你是怎么确认正确的？有没有出过错？", "ambiguity_point_id": "P2", "intent": "确认使用 AI 工具时是否有验证意识"},
+            {"followup_id": "F3", "text": "4 天到岗和 3 个月实习是硬约束还是可协商？课程安排会不会影响？", "ambiguity_point_id": "P3", "intent": "确认投入度是否稳定"},
         ],
     }
 
@@ -288,45 +419,107 @@ SIM_SCORES = {
     "Q10": (87, 45, 70),
 }
 
-SIM_REASONS = {
-    "expert": "给出了具体做法、判断依据与量化结果，落在优秀档",
-    "bluffer": "只有正确但空泛的通用说法，没有任何本人做过的痕迹，落在不合格档",
-    "resume": "能讲清本人做法与基本结果，但量化验证不完整，落在合格档",
+
+
+# 陈涛的题。Q9 是第二个刻意埋的反例：向量检索是好问题（专家答得出、背题党答不出），
+# 但他简历里明说没用过向量数据库，简历人格答不上 —— 三分对照据此判「超出射程」。
+# 这一档是 minor，不阻断流程，只在报告里提示「这道题留给下一轮」。
+SIM_ANSWERS_C = {
+    "Q1": (
+        "脏数据分三类：传感器掉线导致的空值、超出量程的物理不可能值、同一时间戳重复上报。前两类直接丢并计数，第三类保留最后一条。漏掉超量程值会把周报均值拉偏，产线会误判工况。",
+        "数据清洗要处理缺失值、异常值和重复值，常用方法包括均值填充、3σ 原则和去重，需要结合业务场景选择合适的策略。",
+        "主要是把空值和明显不合理的数值去掉，比如温度出现负几百度那种。重复记录我按时间戳去了重。漏掉的话周报数字会不准。",
+    ),
+    "Q2": (
+        "先用历史三个月数据画分布，取 P99 做初始阈值，再和产线老师傅确认哪些告警他们真的会去看。这个场景更怕漏报：漏一次可能是批量不良，误报只是多跑一趟。",
+        "阈值设定需要平衡误报率和漏报率，可以通过 ROC 曲线选择最优工作点，同时结合业务成本进行调整。",
+        "阈值是看历史数据大概定的，取了个经验值。误报多了工人会烦，漏报会出质量问题，我觉得漏报更严重一些。",
+    ),
+    "Q3": (
+        "最容易误解的是「有效工时」——它排除了换模时间但包含调试时间。我在文档里没有只给定义，而是配了一张包含边界情况的示例表，让人直接对着查。",
+        "技术文档要结构清晰、术语统一，使用图表辅助说明，注意读者视角，把复杂概念拆解成易于理解的模块。",
+        "应该是几个指标的口径，比如合格率怎么算。我在文档里都写了公式，还举了例子，同事看了之后没再来问过我。",
+    ),
+    "Q4": (
+        "只在试点线用过两周。卡点是我的图表按天聚合，而排产决策是按班次做的，粒度对不上，他们还得自己再拆一次。",
+        "数据可视化要贴合业务需求，通过与业务方沟通明确使用场景，持续迭代优化图表设计，形成数据驱动的决策闭环。",
+        "生产部门确认收到了图表，具体有没有按它调整排产我不太清楚，我实习结束前没有跟进到这一步。",
+    ),
+    "Q5": (
+        "准备 30 条已知正确结果的查询做对照集，同一需求让模型生成三次，比较结果一致性和与人工 SQL 的差异，重点看聚合口径和 NULL 处理这两个最容易错的地方。",
+        "验证 AI 生成代码需要建立测试用例集，进行单元测试和集成测试，同时人工审核关键逻辑，确保结果准确可靠。",
+        "我会把生成的 SQL 拿到测试库跑一遍，看结果对不对。设计对照实验的话我没做过，可能要准备一批标准答案来比对。",
+    ),
+    "Q6": (
+        "Q 是当前位置要找什么，K 是每个位置能提供什么，V 是真正被取走的内容。点积算相关性、softmax 归一成权重。我自己只手推过一遍小矩阵，没在真实模型上验证过。",
+        "注意力机制中 Query 表示查询向量，Key 是键向量，Value 是值向量，通过 QK 点积计算注意力权重再对 V 加权求和，实现对重要信息的聚焦。",
+        "Q 是查询，K 是键，V 是值，通过 Q 和 K 算相似度得到权重再乘 V。这是课上学的，我没有在项目里实际用过。",
+    ),
+    "Q7": (
+        "补三样：输入数据的 schema 校验（列名和类型变了要立刻报错而不是算出错数）、失败时的明确退出码、还有一份包含真实脏数据的样例输入让对方能自测。",
+        "代码交接需要完善文档、添加注释、编写单元测试，遵循编码规范，使用版本控制工具管理，确保可维护性和可读性。",
+        "我会写个 README 说明怎么跑、需要什么依赖，再把硬编码的路径改成参数。异常处理也要加一些，不然报错看不懂。",
+    ),
+    "Q8": (
+        "就是 MySQL 的 LIKE 模糊匹配加了个分类过滤。涨十倍先垮在全表扫描上，商品表没建合适的索引；再往上是中文分词做不了，搜「自行车」搜不到「单车」。",
+        "搜索功能可以使用数据库索引、全文检索引擎如 Elasticsearch，通过分词、倒排索引和相关性排序提升搜索性能和准确度。",
+        "用的是 MySQL 的模糊查询。数据量大了应该会变慢，可能需要加索引或者上专门的搜索引擎，具体我没测过。",
+    ),
+    "Q9": (
+        "召回质量看两个：人工标注 100 条查询的相关商品做 Recall@10，再抽查高频零结果查询。切块粒度对商品这种短文本不适用，应该整条标题加描述做一个向量，反而要考虑的是标题和描述该不该分开建两路召回。",
+        "向量检索需要选择合适的嵌入模型，通过余弦相似度计算语义相关性，评估指标包括召回率、准确率和 MRR，切块要平衡语义完整性和检索精度。",
+        "向量检索我没有用过，只知道大概是把文本转成向量再算相似度。怎么评估召回质量和切块粒度我确实不了解，需要学习之后才能回答。",
+    ),
+    "Q10": (
+        "现在这个场景我还是选规则：告警要能向产线解释为什么响，规则说得清。换模型的前提是有足够多的标注异常样本，且存在规则表达不了的多变量联合模式 —— 我那个场景两个条件都不满足。",
+        "规则引擎适合逻辑明确、可解释性要求高的场景，模型方法适合复杂非线性关系，选择时要考虑数据量、可解释性需求和维护成本。",
+        "规则简单直接，出了问题好排查。用模型的话应该需要比较多的历史数据来训练，我那个项目数据量不大，所以用了规则。",
+    ),
+}
+
+# Q9：简历人格 45 < resume_pass=60 -> 超出射程（minor，不阻断）
+SIM_SCORES_C = {
+    "Q1": (92, 30, 75), "Q2": (88, 35, 70), "Q3": (85, 32, 78), "Q4": (87, 38, 72),
+    "Q5": (90, 42, 64), "Q6": (89, 45, 62), "Q7": (86, 33, 68), "Q8": (88, 36, 66),
+    "Q9": (90, 40, 45), "Q10": (87, 34, 61),
 }
 
 
-def persona_answers_payload(persona_index: int) -> dict:
-    """三个人格的作答。persona_index: 0=专家 1=背题党 2=简历人格。"""
+def persona_answers_payload(table: dict, persona_index: int) -> dict:
+    """某个人格对整套题的作答。persona_index: 0=专家 1=背题党 2=简历人格。"""
     return {
         "answers": [
             {"question_id": qid, "answer": answers[persona_index]}
-            for qid, answers in SIM_ANSWERS.items()
+            for qid, answers in table.items()
         ]
     }
 
 
-def grader_payload() -> dict:
+def grader_payload(table: Optional[dict] = None) -> dict:
     """盲评结果。
 
     标签不能手写死：`grade_blind` 每道题都按 question_id 派生一个独立的
     标签映射，夹具必须用同一个函数反推，否则分数会记到错误的人格头上。
+
+    评语按分数档位现算，不按题号硬编码 —— 两套题里都有 Q9，但它们不合格的
+    原因完全不同（一个是背题党答得太好，一个是简历人格答不上）。
     """
-    scores = []
-    for qid, (expert, bluffer, resume) in SIM_SCORES.items():
+    table = SIM_SCORES if table is None else table
+    rows = []
+    for qid, (expert, bluffer, resume) in table.items():
         per_persona = {"expert": expert, "bluffer": bluffer, "resume": resume}
         for label, persona in label_map(qid, sorted(per_persona)).items():
-            reason = SIM_REASONS[persona]
-            if persona == "bluffer" and qid == "Q9":
-                reason = "虽无个人经历，但分层排查的通用思路已覆盖题目要点，落在合格档"
-            scores.append(
-                {
-                    "question_id": qid,
-                    "label": label,
-                    "score": per_persona[persona],
-                    "reason": reason,
-                }
+            score = per_persona[persona]
+            if score >= 85:
+                reason = "给出了具体做法、判断依据与量化结果，落在优秀档"
+            elif score >= 60:
+                reason = "能讲清本人做法与基本结果，但量化验证不完整，落在合格档"
+            else:
+                reason = "只有正确但空泛的通用说法，没有本人做过的痕迹，落在不合格档"
+            rows.append(
+                {"question_id": qid, "label": label, "score": score, "reason": reason}
             )
-    return {"scores": scores}
+    return {"scores": rows}
 
 
 class FixtureClient:
@@ -357,9 +550,9 @@ def main() -> None:
         load_text(data.decode("utf-8"), filename=name)
         for name, data in resumes
     ]
-    if len(resume_docs) != 2:
-        raise AssertionError("内置 Demo 目前要求恰好两份样例简历")
-    a_id, b_id = (doc.doc_id for doc in resume_docs)
+    if len(resume_docs) != 3:
+        raise AssertionError("内置 Demo 目前要求恰好三份样例简历（推进 / 待定 / 淘汰各一）")
+    a_id, b_id, c_id = (doc.doc_id for doc in resume_docs)
 
     final_questions = questions_payload(a_id)
     first_question_attempt = {"questions": final_questions["questions"][:9]}
@@ -378,16 +571,38 @@ def main() -> None:
 
     client = FixtureClient([
         jd_payload(),
-        resume_a_payload(a_id), match_a_payload(a_id),
-        resume_b_payload(b_id), match_b_payload(b_id),
+        # 每位候选人：提取 -> 匹配 -> （规则通过后）语义校验
+        resume_a_payload(a_id), match_a_payload(a_id), semantic_clean_payload(),
+        resume_b_payload(b_id), match_b_payload(b_id), semantic_clean_payload(),
+        # 陈涛的 R5 理由与证据矛盾：语义校验检出一条 major。
+        # 一条 major 判 CONDITIONAL_PASS（可用但建议人工过目），不触发重写 ——
+        # 语义判断有误报可能，一条就打回反而容易把正确结论改坏。
+        resume_c_payload(c_id), match_c_payload(c_id), semantic_c_payload(),
         # 首轮 9 道题被数量规则判 blocker，此时**不会**触发盲评 ——
         # 对一套即将重写的题做模拟是浪费，所以这里没有人格作答的夹具。
         first_question_attempt, revised_question_set,
         # 补齐到 10 道、确定性规则通过之后才进入 SIMULATE：
         # 专家 -> 背题党 -> 简历人格 -> 盲评阅卷。
-        persona_answers_payload(0), persona_answers_payload(1), persona_answers_payload(2),
+        persona_answers_payload(SIM_ANSWERS, 0),
+        persona_answers_payload(SIM_ANSWERS, 1),
+        persona_answers_payload(SIM_ANSWERS, 2),
         grader_payload(),
         followups_payload(a_id),
+        # 陈涛是 HOLD，同样要出题 —— 只有被 REJECT 的才不出。
+        questions_c_payload(c_id),
+        persona_answers_payload(SIM_ANSWERS_C, 0),
+        persona_answers_payload(SIM_ANSWERS_C, 1),
+        persona_answers_payload(SIM_ANSWERS_C, 2),
+        grader_payload(SIM_SCORES_C),
+        followups_c_payload(c_id),
+
+        # ---- 第二轮 ----
+        # 只有出题 prompt 变了（注入了第一轮沉淀的经验），其余调用键不变、
+        # 全部命中缓存。所以这里只需要两条：两位推进候选人的出题结果。
+        # 两人这次都一次给足 10 道 —— 「上次题数不足被打回」正是注入的经验之一。
+        # 题目内容与第一轮的最终结果一致，因此后续的人格作答与盲评继续命中缓存。
+        final_questions,
+        questions_c_payload(c_id),
     ])
 
     with tempfile.TemporaryDirectory(prefix="resume-demo-cache-") as temp:
@@ -410,6 +625,9 @@ def main() -> None:
         # 因此回放时仍可安全并行。
         settings.max_parallel_candidates = 1
         settings.cache_dir = temp_root / "runtime"
+        # 经验库隔离到临时目录：否则本机跑过 demo 之后再重建缓存，
+        # 第一轮就带着上次的经验，生成出来的键与「首次运行」对不上。
+        settings.lessons_path = temp_root / "lessons.jsonl"
         settings.demo_cache_dir = temp_root / "empty-demo"
         settings.trace_dir = temp_root / "traces"
         structured._default_tracer = None
@@ -418,13 +636,32 @@ def main() -> None:
         structured.get_client = lambda _settings: client
         try:
             result = api.run(jd_text, resumes)
+            # 第二轮：第一轮的问题已沉淀进经验库，出题 prompt 会带上它们，
+            # 缓存键因此不同。把这一轮也录进去，评审者连跑两次才不会未命中 ——
+            # 而且第二轮的改善本身就是飞轮的完成标志。
+            second = api.run(jd_text, resumes)
         finally:
             structured.get_client = original_get_client
 
         if client.payloads:
             raise AssertionError(f"仍有 {len(client.payloads)} 条 Demo 响应未被状态机消费")
-        if [item.recommendation for item in result.ranking.items] != ["ADVANCE", "REJECT"]:
-            raise AssertionError("Demo 排序结果与预期不一致")
+
+        # 飞轮：第一轮题数不足被打回，第二轮带着经验一次到位
+        first_q = next(s for s in result.candidates[0].stages if s.stage == "question_set")
+        second_q = next(s for s in second.candidates[0].stages if s.stage == "question_set")
+        if first_q.rounds_used != 1 or second_q.rounds_used != 0:
+            raise AssertionError(
+                f"飞轮应让第二轮免于重复同一个错误，实际 {first_q.rounds_used} -> {second_q.rounds_used}"
+            )
+        lessons = load_all(settings.lessons_path)
+        if not any(x.issue_code == "Q_COUNT_LT_MIN" for x in lessons):
+            raise AssertionError("题数不足这条经验没有被沉淀")
+        recs = [item.recommendation for item in result.ranking.items]
+        if recs != ["ADVANCE", "HOLD", "REJECT"]:
+            raise AssertionError(f"Demo 必须让三档决策各出现一次，实际为 {recs}")
+        hold = next(i for i in result.ranking.items if i.recommendation == "HOLD")
+        if not (60.0 <= hold.total_score < 75.0):
+            raise AssertionError(f"待定候选人应落在 [60, 75) 区间，实际 {hold.total_score}")
         if not result.candidates[0].question_set or len(result.candidates[0].question_set.questions) != 10:
             raise AssertionError("Demo 必须为推进候选人生成 10 道题")
         question_stage = next(
@@ -434,6 +671,19 @@ def main() -> None:
             raise AssertionError("Demo 必须展示 Checker 发现问题并完成至少一轮修订")
         if any(not stage.gate.passed for candidate in result.candidates for stage in candidate.stages):
             raise AssertionError("Demo 的每个 Checker 阶段都必须通过")
+
+        # 语义校验必须真的跑到，并且抓到那条埋进去的矛盾
+        held = next(c for c in result.candidates if c.match_result.recommendation == "HOLD")
+        if held.semantic is None or not held.semantic.checked:
+            raise AssertionError("语义校验没有跑到")
+        match_stage = next(s for s in held.stages if s.stage == "match")
+        sem = [i for i in match_stage.detected if i.detector == "llm"]
+        if [i.issue_code for i in sem] != ["SEM_REASON_CONTRADICTS_EVIDENCE"]:
+            raise AssertionError(f"语义校验未按预期检出，实际 {[i.issue_code for i in sem]}")
+        if match_stage.gate.status != "CONDITIONAL_PASS":
+            raise AssertionError("一条语义 major 应判 CONDITIONAL_PASS，交人工过目而不是自动重写")
+        if match_stage.rounds_used != 0:
+            raise AssertionError("语义校验的单条发现不应触发重写")
 
         simulation = result.candidates[0].simulation
         if simulation is None or len(simulation.diagnoses) != 10:

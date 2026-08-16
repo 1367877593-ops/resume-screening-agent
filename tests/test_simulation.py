@@ -77,6 +77,7 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(s, "cache_enabled", False, raising=False)
     monkeypatch.setattr(s, "demo_mode", False, raising=False)
     monkeypatch.setattr(s, "cache_dir", tmp_path / "cache", raising=False)
+    monkeypatch.setattr(s, "lessons_path", tmp_path / "lessons.jsonl", raising=False)
     monkeypatch.setattr(s, "demo_cache_dir", tmp_path / "demo", raising=False)
     monkeypatch.setattr(s, "trace_dir", tmp_path / "traces", raising=False)
     monkeypatch.setattr(structured, "_default_tracer", _NullTracer(), raising=False)

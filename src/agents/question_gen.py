@@ -12,11 +12,13 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from config.settings import get_thresholds
+from config.settings import get_settings, get_thresholds
+from flywheel.retrieve import lessons_block
 from harness.structured import call_structured
 from schema.document import RawDoc
 from schema.jd import JD
 from schema.match import MatchResult
+from schema.lesson import render_for_prompt
 from schema.question import QuestionFull, QuestionSet
 
 
@@ -50,6 +52,14 @@ def generate_questions(
     model: Optional[str] = None,
 ) -> QuestionSet:
     min_count = get_thresholds()["question"]["min_count"]
+    # 飞轮：把这个岗位以往被 Checker 打回的问题注入 prompt。
+    # 关掉时注入固定的占位文本而不是省掉这一段 —— 让开关只影响内容、
+    # 不改变 prompt 结构，缓存键的差异因此是可解释的。
+    lessons = (
+        lessons_block(jd.title, stage="question_set")
+        if get_settings().flywheel_enabled
+        else render_for_prompt([])
+    )
     requirements = json.dumps(
         [{"requirement_id": r.requirement_id, "text": r.text} for r in jd.requirements],
         ensure_ascii=False,
@@ -64,6 +74,7 @@ def generate_questions(
             "weak_points": _weak_points(jd, match_result),
             "min_count": min_count,
             "doc_id": resume_doc.doc_id,
+            "lessons": lessons,
         },
         _GeneratedQuestions,
         model=model,

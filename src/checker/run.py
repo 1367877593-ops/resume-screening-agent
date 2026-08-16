@@ -12,6 +12,7 @@ from schema.jd import JD
 from schema.match import MatchResult
 from schema.question import QuestionSet
 from schema.resume import ExtractedResume
+from schema.semantic import SemanticReport
 from schema.simulation import SimulationReport
 
 from checker import rules  # noqa: F401  导入即注册，不可删
@@ -41,12 +42,15 @@ def check_match(
     resume_doc: RawDoc,
     round_no: int = 0,
     thresholds: Optional[dict] = None,
+    semantic: Optional[SemanticReport] = None,
 ) -> Checked:
+    """`semantic` 为 None 时只跑确定性规则 —— 语义校验是可选增强，不是前置依赖。"""
     ctx = RuleContext(
         thresholds=thresholds or get_thresholds(),
         jd=jd,
         match_result=match_result,
         resume_doc=resume_doc,
+        semantic=semantic,
     )
     return _finish("match", match_result.resume_id, ctx, round_no)
 

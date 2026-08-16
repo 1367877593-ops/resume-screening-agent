@@ -14,11 +14,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from config.settings import ROOT, get_settings
+from flywheel.retrieve import retrieve
 from harness.structured import start_run
 from harness.trace import new_run_id, read_traces, summarize
 from ingest.loader import load_file, load_text
 from schema.document import RawDoc
-from store.repository import list_runs, load_run, save_run
+from store.repository import list_runs, load_run, save_run, top_candidates
 
 from pipeline.orchestrator import (
     CandidateOutcome,
@@ -150,6 +151,7 @@ def result_to_dict(result: PipelineResult, run_id: Optional[str] = None) -> Dict
                 "questions": o.question_set.model_dump(mode="json") if o.question_set else None,
                 "followups": o.followups.model_dump(mode="json") if o.followups else None,
                 "simulation": o.simulation.model_dump(mode="json") if o.simulation else None,
+                "semantic": o.semantic.model_dump(mode="json") if o.semantic else None,
                 "stages": [
                     {
                         "stage": s.stage,
@@ -194,6 +196,26 @@ def load(run_id: str) -> Optional[Dict[str, Any]]:
     return load_run(run_id)
 
 
+def best_candidates(limit: int = 10) -> List[Dict[str, Any]]:
+    """跨批次的高分候选人，已排除 REJECT。
+
+    结构化存储相对「一次运行写一个 JSON 文件」的实际价值就在这一句 SQL：
+    同一个岗位分几批筛，值得回头看的人不会淹没在某一批里。
+    """
+    return top_candidates(limit)
+
+
+def lessons_for(jd_title: str, stage: str = "question_set") -> List[Dict[str, Any]]:
+    """该岗位已沉淀、且会在下次生成前注入的经验。
+
+    界面需要它来回答一个具体问题：「这次出题到底吃到了多少历史教训」——
+    否则飞轮只是一个后台文件，使用者无从判断它有没有在工作。
+    """
+    if not get_settings().flywheel_enabled:
+        return []
+    return [x.model_dump(mode="json") for x in retrieve(jd_title, stage=stage)]
+
+
 # ------------------------------------------------------------------ trace
 
 
@@ -229,5 +251,6 @@ def runtime_mode() -> Dict[str, Any]:
         "cache_enabled": s.cache_enabled,
         "max_parallel_candidates": s.max_parallel_candidates,
         "simulation_enabled": s.simulation_enabled,
+        "semantic_check_enabled": s.semantic_check_enabled,
         "persist_runs": s.persist_runs,
     }

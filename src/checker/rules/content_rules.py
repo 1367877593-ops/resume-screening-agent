@@ -125,6 +125,33 @@ def rule_match_evidence_is_grounded(ctx: RuleContext) -> List[Issue]:
 # ------------------------------------------------------------------ 题目
 
 
+@register("match")
+def rule_semantic_contradictions(ctx: RuleContext) -> List[Issue]:
+    """把语义校验的结论翻译成 Issue（detector = llm）。
+
+    和盲评那条规则一样，这里只做映射，不发起调用 —— 规则表整体保持纯函数，
+    可以脱离 LLM 单测。真正的调用在 `checker/semantic.py`，且只在确定性
+    规则全过之后才会发生。
+
+    判 major 而不是 blocker：语义判断本身有误报可能，让它进报告、攒够三条
+    才触发重写，比一条就打回要稳。
+    """
+    if ctx.semantic is None:
+        return []
+    return [
+        Issue(
+            issue_code="SEM_REASON_CONTRADICTS_EVIDENCE",
+            severity="major",
+            detector="llm",
+            dimension="语义一致性",
+            message=f"{f.requirement_id}：{f.explanation}",
+            target_path=f"verdicts[{f.requirement_id}]",
+            suggestion="把判定改成证据真正支持的档位，或换一条撑得起结论的原文",
+        )
+        for f in ctx.semantic.findings
+    ]
+
+
 @register("question_set")
 def rule_question_evidence_is_grounded(ctx: RuleContext) -> List[Issue]:
     if ctx.question_set is None or ctx.resume_doc is None:

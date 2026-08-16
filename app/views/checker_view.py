@@ -32,16 +32,31 @@ def render(payload: Dict[str, Any]) -> None:
     if not rid:
         return
 
-    stages = payload["candidates"][rid]["stages"]
-    all_issues = [i for s in stages for i in s["issues"]]
+    candidate = payload["candidates"][rid]
+    stages = candidate["stages"]
+    remaining = [i for s in stages for i in s["issues"]]
+    # 占比必须用各轮累计检出：只看最终报告会把「被规则抓到又修好」的那些抹掉，
+    # 反而显得这套校验主要靠 LLM。这是同一个口径在 eval 里也踩过的坑。
+    detected = [i for s in stages for i in s["detected_issues"]]
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("检出问题", len(all_issues))
+    c1.metric("累计检出", len(detected), help="含已修复的；占比按这个口径算")
     c2.metric("修订轮数", sum(s["rounds_used"] for s in stages))
-    c3.metric("blocker", sum(1 for i in all_issues if i["severity"] == "blocker"))
-    st.caption("检出来源：" + _detector_summary(all_issues))
+    c3.metric("仍未解决", len(remaining))
+    st.caption("检出来源：" + _detector_summary(detected))
     st.caption("能用确定性规则判断的一律不调 LLM。这个占比如实公开 —— "
                "如果绝大多数问题都靠 LLM 检出，说明这套校验的可信度有限。")
+
+    semantic = candidate.get("semantic")
+    if semantic is not None:
+        n = len(semantic["findings"])
+        if semantic["checked"] == 0:
+            st.caption("语义校验：没有带证据的判定可送检。")
+        elif n:
+            st.caption(f"语义校验：送检 {semantic['checked']} 条判定，发现 {n} 条证据撑不起结论。")
+        else:
+            # 「查了没问题」和「根本没查」在报告里都是零发现，必须区分开
+            st.caption(f"语义校验：送检 {semantic['checked']} 条判定，未发现矛盾。")
 
     st.divider()
 

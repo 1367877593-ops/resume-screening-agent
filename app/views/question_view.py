@@ -120,9 +120,26 @@ def _simulation_section(sim: Dict[str, Any], questions: List[Dict[str, Any]]) ->
     st.divider()
 
 
+def _flywheel_note(lessons: List[Dict[str, Any]]) -> None:
+    """出题时注入了哪些历史教训。
+
+    不展示的话，飞轮就只是一个后台文件，使用者无从判断它有没有在工作。
+    """
+    if not lessons:
+        return
+    with st.expander(f"出题时注入了 {len(lessons)} 条历史经验（反思飞轮）"):
+        st.caption(
+            "这些是本岗位以往被 Checker 打回的问题，会在下次生成前注入 prompt。"
+            "注入内容只含告诫文本，不含命中次数 —— 否则每跑一次 prompt 就变一次。"
+        )
+        for x in sorted(lessons, key=lambda i: -i["hits"]):
+            st.markdown(f"- `{x['issue_code']}`（累计 {x['hits']} 次）　{x['guidance']}")
+
+
 def render(
     payload: Dict[str, Any],
     on_generate: Optional[Callable[[str], None]] = None,
+    lessons: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     rid = candidate_picker(payload, key="q_pick")
     if not rid:
@@ -154,6 +171,8 @@ def render(
 
     counts = {k: sum(1 for q in questions if q["difficulty"] == k) for k in DIFF}
     st.caption("难度分布： " + " ／ ".join(f"{DIFF[k]} {v}" for k, v in counts.items()))
+
+    _flywheel_note(lessons or [])
 
     st.divider()
     sim = data.get("simulation")

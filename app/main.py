@@ -20,7 +20,9 @@ import streamlit as st  # noqa: E402
 
 from pipeline import api  # noqa: E402
 
-from views import checker_view, match_view, question_view, ranking_view, trace_view  # noqa: E402
+from views import (  # noqa: E402
+    checker_view, history_view, match_view, question_view, ranking_view, trace_view,
+)
 
 st.set_page_config(page_title="智能简历解析与试题生成引擎", page_icon="📋", layout="wide")
 
@@ -159,6 +161,21 @@ def _generate_interview(resume_id: str) -> None:
     st.rerun()
 
 
+def _load_history(run_id: str) -> None:
+    """载入一次历史运行。
+
+    只恢复 payload（展示用），不恢复 PipelineResult 对象 —— 后者含不可序列化的
+    中间状态。因此历史结果不能再「按需生成面试题」，题目页会如实说明。
+    """
+    payload = api.load(run_id)
+    if payload is None:
+        st.session_state["error"] = f"找不到运行记录 {run_id}"
+    else:
+        st.session_state["result"] = payload
+        st.session_state.pop("result_obj", None)
+    st.rerun()
+
+
 def access_gate() -> None:
     """可选的公网访问门禁；口令只在当前浏览器会话中保留认证结果。"""
     if not api.access_control_required():
@@ -197,6 +214,13 @@ def main() -> None:
             st.info("点击左侧「一键运行内置 Demo」，即可看到完整筛选流程。")
         else:
             st.info("载入样例或上传自己的简历，再点「开始筛选」。")
+        # 还没跑过也应该能翻历史，否则重启后以前的批次就找不回来了
+        if api.persistence_enabled() and api.history():
+            with st.expander("历史记录", expanded=True):
+                history_view.render(
+                    api.history(), api.best_candidates(),
+                    persistence_enabled=True, on_load=_load_history,
+                )
         with st.expander("这个系统做了什么"):
             st.markdown(
                 "1. **JD 拆解**成可逐条判定的加权要求项，标出硬性门槛\n"
@@ -208,13 +232,16 @@ def main() -> None:
             )
         return
 
-    tabs = st.tabs(["候选人排序", "匹配详情", "题目与追问", "校验与修订", "调用链"])
+    tabs = st.tabs(["候选人排序", "匹配详情", "题目与追问", "校验与修订", "调用链", "历史记录"])
     with tabs[0]:
         ranking_view.render(payload)
     with tabs[1]:
         match_view.render(payload)
     with tabs[2]:
-        question_view.render(payload, on_generate=_generate_interview)
+        question_view.render(
+            payload, on_generate=_generate_interview,
+            lessons=api.lessons_for(payload['jd']['title']),
+        )
     with tabs[3]:
         checker_view.render(payload)
     with tabs[4]:
@@ -225,6 +252,14 @@ def main() -> None:
         trace_view.render(
             api.trace_stats(rid), api.trace_rows(run_id=rid),
             scope="全部历史运行" if all_runs else f"本次运行（{payload['run_id']}）",
+        )
+    with tabs[5]:
+        history_view.render(
+            api.history() if api.persistence_enabled() else [],
+            api.best_candidates() if api.persistence_enabled() else [],
+            persistence_enabled=api.persistence_enabled(),
+            current_run_id=payload["run_id"],
+            on_load=_load_history,
         )
 
 

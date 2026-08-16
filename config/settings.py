@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     # 给单次请求设置硬上限，避免异常输出持续消耗额度。
     llm_max_output_tokens: int = 8192
 
+    # ---- 反思飞轮 ----
+    # Checker 发现的问题沉淀为经验，下次同岗位生成前注入 prompt。
+    # 不额外消耗调用，只改变 prompt 内容 —— 但因此会改变缓存键。
+    flywheel_enabled: bool = True
+
+    # ---- 语义一致性校验 ----
+    # 每位候选人多 1 次调用。这是项目里唯一「用 LLM 验证 LLM」的一层，
+    # 只在确定性规则全过之后才跑；关掉不影响主闭环。
+    semantic_check_enabled: bool = True
+
     # ---- L2 三人格盲评 ----
     # 每套题多花 4 次调用（3 次作答 + 1 次盲评）。关掉不影响 L1 闭环，
     # 只是题目质量维度退回「查重」这一条确定性规则。
@@ -52,9 +62,9 @@ class Settings(BaseSettings):
     # ---- 公开部署保护 ----
     # 为空时不启用口令；部署到公网时必须通过云端 Secret 设置。
     app_access_code: str = ""
-    max_resumes_per_run: int = 5
+    max_resumes_per_run: int = 10
     max_jd_chars: int = 20_000
-    max_total_upload_mb: int = 20
+    max_total_upload_mb: int = 30
 
     # ---- 调用控制 ----
     llm_timeout_seconds: int = 60
