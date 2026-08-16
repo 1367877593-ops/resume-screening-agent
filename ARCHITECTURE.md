@@ -14,8 +14,8 @@
 | 层 | 内容 | 状态 |
 |---|---|---|
 | **L1 闭环层** | 上传 → 提取 → 匹配打分与推进决策 → 候选人排序 → 试题与追问 → 规则 Checker → 修订闭环 → Streamlit 展示 | ✅ 已完成 |
-| **L2 增强层** | 三人格盲评模拟；反思飞轮 | 盲评 ✅；飞轮未实现 |
-| **L3 加固层** | 语义 Checker、稳定性评测、trace 面板、UI 打磨 | 评测与 trace 面板 ✅；语义 Checker 未实现 |
+| **L2 增强层** | 三人格盲评模拟；反思飞轮 | ✅ 已完成 |
+| **L3 加固层** | 语义 Checker、稳定性评测、trace 面板、UI 打磨 | ✅ 已完成 |
 
 顺序不能颠倒的原因是工程上的：任何时刻仓库里都必须有一个能跑通的 Demo。增强层的价值建立在闭环之上 —— 三人格盲评要有题可评，得先有出题；出题要有依据，得先有提取和匹配。先做深度再补闭环，中间任何一步卡住，整个项目就没有可运行的形态。
 
@@ -60,7 +60,7 @@ resume-screening-agent/
 │   ├── persona_bluffer.md
 │   ├── persona_resume.md
 │   ├── grader.md                  # 盲评阅卷官
-│   ├── checker_semantic.md        # 未实现
+│   ├── checker_semantic.md        # 语义一致性校验
 │   ├── reviser.md
 │   └── _archive/                  # ★ 旧版本必须留档，README 的迭代对比靠它
 │       └── question_gen.v1.md
@@ -75,7 +75,9 @@ resume-screening-agent/
 │   │   ├── question.py            # QuestionFull, QuestionPublic, Rubric, QuestionSet
 │   │   ├── followup.py            # AmbiguityPoint, FollowUpQuestion
 │   │   ├── issue.py               # Issue, Severity, Detector, CheckReport, Gate
-│   │   └── simulation.py          # Persona, SimAnswer, SimScore, QuestionDiagnosis
+│   │   ├── simulation.py          # Persona, SimAnswer, SimScore, QuestionDiagnosis
+│   │   ├── semantic.py            # SemanticFinding, SemanticReport
+│   │   └── lesson.py              # Lesson（飞轮经验条目）
 │   │
 │   ├── harness/                   # ★ LLM 调用的可靠性层（四个文件，不再拆细）
 │   │   ├── llm_client.py          # 统一入口 + provider 切换 + 重试退避 + 限流
@@ -107,7 +109,7 @@ resume-screening-agent/
 │   │   ├── rules/                 # detector = "rule"（两个文件，按校验性质分）
 │   │   │   ├── structure_rules.py # 数量、schema、字段完整性、算术一致性
 │   │   │   └── content_rules.py   # 证据存在性、归因正确性、题目重复度
-│   │   ├── semantic.py            # detector = "llm"（未实现）
+│   │   ├── semantic.py            # detector = "llm"，只在规则全过后才跑
 │   │   ├── simulation/            # detector = "sim" ★
 │   │   │   ├── personas.py        # 三人格作答（签名只收 QuestionPublic）
 │   │   │   ├── grader.py          # 盲评，标签按题打乱
@@ -115,7 +117,7 @@ resume-screening-agent/
 │   │   │   └── run.py             # 作答 -> 盲评 -> 诊断
 │   │   └── gate.py                # 通过规则 + 熔断
 │   │
-│   ├── flywheel/                  # 未实现
+│   ├── flywheel/
 │   │   ├── lessons.py             # 写入、去重、容量控制（JSONL）
 │   │   └── retrieve.py            # 按岗位类型 + issue_code 检索注入
 │   │
@@ -132,13 +134,14 @@ resume-screening-agent/
 │       ├── match_view.py          # 分项判定 + 点击理由高亮原文
 │       ├── question_view.py       # 10 题 + 三人格盲评热力图
 │       ├── checker_view.py        # issue 列表 + 修订前后 diff
-│       └── trace_view.py          # 调用链
+│       ├── trace_view.py          # 调用链
+│       └── history_view.py        # 历次批次回看 + 跨批次最高分
 │
 ├── eval/
 │   └── run_eval.py                # 检出占比 / 盲评诊断分布 / 分数方差
 │
 ├── data/
-│   ├── samples/                   # 1 份 JD + 2 份对比鲜明的简历
+│   ├── samples/                   # 1 份 JD + 3 份简历（推进 / 待定 / 淘汰各一）
 │   ├── demo_cache/                # ★ 提交进仓库：DEMO_MODE 回放用
 │   └── runtime/                   # traces / lessons / db（gitignore）
 │
@@ -295,7 +298,7 @@ flowchart TD
     K --> L{"CHECK(question / set)"}
     L -->|FAIL| M["REVISE → 增量重跑"]
     M --> L
-    L -->|PASS| O["WRITE_LESSONS<br/>（飞轮，未实现）"]
+    L -->|PASS| O["WRITE_LESSONS<br/>（飞轮）"]
     O --> N
 ```
 
@@ -351,9 +354,11 @@ flowchart TD
 
 - `DEMO_MODE=1` 时，`harness/cache.py` 强制命中 `data/demo_cache/`，`llm_client` 不发起任何真实请求。
 - **缓存未命中必须显式抛错**，绝不静默回退到真实调用 —— 否则会在别人机器上悄悄变成一次失败的请求，或伪造出假数据。
-- `make demo` 即 `DEMO_MODE=1` 启动，样例数据（1 份 JD + 2 份对比鲜明的简历）内置在 `data/samples/`。
-- 内置样例刻意保留两处不完美：首轮题目数量不足会被规则打回一轮，另有一道题会被盲评判为无区分度。
-  演示的是机制在工作，不是一份摆拍的完美结果。
+- `make demo` 即 `DEMO_MODE=1` 启动，样例数据（1 份 JD + 3 份简历）内置在 `data/samples/`。
+- **三份简历刻意覆盖三档决策**：推进 / 待定 / 淘汰各一位。只配「全 YES」和「全 NO」两个极端时，
+  分档阈值、`PARTIAL` 判定与 `CONDITIONAL_PASS` 放行写了也演示不出来。
+- 样例还刻意保留三处不完美：首轮题目数量不足被规则打回一轮；一道题被盲评判为无区分度；
+  另一道被判超出候选人射程。演示的是机制在工作，不是一份摆拍的完美结果。
 
 缓存这一层是一处投入、三处收益：开发期不烧钱、无 Key 可复现、修订时未变更对象可复用上轮结论。
 
@@ -400,14 +405,14 @@ flowchart TD
 | 阶段 | 内容 | 完成标志 | 状态 |
 |---|---|---|---|
 | 6 | simulation 三人格 + 盲评 + 诊断 | 题目热力图出来，能指出哪道题无区分度 | ✅ |
-| 7 | flywheel | 第二次运行时能看到经验被检索注入 | 未实现 |
+| 7 | flywheel | 第二次运行时能看到经验被检索注入 | ✅ |
 
 ### L3 加固层
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 8 | `eval/run_eval.py`、trace_view、UI 打磨 | ✅ |
-| 9 | semantic checker（detector = llm） | 未实现 |
+| 9 | semantic checker（detector = llm） | ✅ |
 
 ---
 

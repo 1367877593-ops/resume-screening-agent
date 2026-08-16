@@ -14,8 +14,8 @@
 按 L1 → L2 → L3 顺序推进，**上一层未跑通不写下一层的代码**：
 
 - **L1 闭环层**（✅ 已完成）：上传 → 提取 → 匹配打分与推进决策 → 排序 → 试题与追问 → 规则 Checker → 修订闭环 → Streamlit 展示
-- **L2 增强层**：三人格盲评模拟（✅ 已完成）+ 反思飞轮（未实现）
-- **L3 加固层**：`eval/run_eval.py` 与 trace 面板（✅ 已完成）、语义 Checker（未实现）、UI 打磨
+- **L2 增强层**：三人格盲评模拟 + 反思飞轮（✅ 已完成）
+- **L3 加固层**：`eval/run_eval.py`、trace 面板、语义 Checker（✅ 已完成）、UI 打磨
 
 任何时刻仓库里都必须有一个能跑通的 Demo。不要在闭环未完成时去优化加固层的东西。
 
@@ -58,6 +58,16 @@ schema ← harness ← store/ingest ← agents/checker ← pipeline ← app
 - 确定性规则先跑：出现 blocker 时跳过模拟，那套题马上要被重写
 - `SIMULATION_ENABLED=0` 必须能整体关掉，且不影响 L1 闭环
 
+## 反思飞轮
+
+- 注入 prompt 的文本**必须稳定**：只渲染去重排序后的告诫，不带 hits 与时间戳。
+  否则每跑一次 prompt 就变一次，缓存键全部漂移，无 Key 回放直接失效
+- 经验按 (岗位, `issue_code`) 合并累加，不是每次运行堆新条目；每个岗位有容量上限
+- 沉淀用 `StageOutcome.detected`（各轮累计）而不是最终 report ——
+  被修好的问题恰恰最该记住：这次靠修订补救了，下次应该一开始就不犯
+- 写入失败不得中断流水线：经验库是增强，不是主干
+- 测试必须隔离 `lessons_path`，否则本机跑过 demo 之后测试结果就变了
+
 ## 配置与 Prompt
 
 - 禁止硬编码任何阈值，全部从 `config/thresholds.yaml` 读取
@@ -71,6 +81,9 @@ schema ← harness ← store/ingest ← agents/checker ← pipeline ← app
 
 - 能用确定性规则判断的，禁止调用 LLM
   （数量校验、schema 校验、算术校验、字符串匹配、向量相似度）
+- 语义校验（`checker/semantic.py`）是唯一的例外，因此它必须**排在最后**：
+  只在确定性规则全过后才跑，只送检有证据的判定，判 major 不判 blocker，
+  且 `SEMANTIC_CHECK_ENABLED=0` 能整体关掉而不影响主闭环
 - 每条规则用 `@register` 注册，新增规则不得修改调度代码
 - 规则文件按性质分两个：`structure_rules.py`（数量/schema/算术）与
   `content_rules.py`（证据存在性/归因/查重/盲评结论翻译），不要继续拆细
