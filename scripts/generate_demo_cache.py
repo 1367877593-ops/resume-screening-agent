@@ -18,6 +18,7 @@ for path in (ROOT / "src", ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from checker.simulation.grader import label_map  # noqa: E402
 from config.settings import get_settings  # noqa: E402
 from harness import structured  # noqa: E402
 from harness.llm_client import LLMResponse  # noqa: E402
@@ -212,6 +213,122 @@ def followups_payload(doc_id: str) -> dict:
     }
 
 
+# ------------------------------------------------------------------ 三人格盲评
+#
+# 每道题给三份作答和三个分数。Q9 是故意埋的反例：它问的是通用故障排查思路，
+# 背题党靠面经就能答得像模像样，因此盲评会给出高分，三分对照据此判定
+# 「无区分度」。Demo 因此展示的不是一份完美结果，而是这套机制确实能抓到
+# 自己生成的弱题 —— 那才是这个模块存在的理由。
+
+SIM_ANSWERS = {
+    "Q1": (
+        "先做改动切片：检索召回、重排、Prompt 各自单独上线一次，用同一批评测集测差值。再用自助采样给 23 个百分点算置信区间，区间跨 0 的部分不算数。",
+        "准确率提升要从数据质量、模型选型、Prompt 优化三方面归因，同时要做好 A/B 测试和消融实验，确保结果具有统计显著性。",
+        "主要是把切块从固定长度改成按条款切，再加了重排。具体每部分贡献多少我当时没有分开测，是一起上线后看的整体提升。",
+    ),
+    "Q2": (
+        "三版分别改了角色设定、few-shot 数量和输出约束。只改一个变量，固定同一批 200 条样本对比，最终版赢在输出格式违规率从 12% 降到 1%。",
+        "Prompt 迭代一般是从零样本到少样本再到思维链，要注意角色扮演、任务分解和输出格式约束，通过对比实验选出最优版本。",
+        "第一版直接问，第二版加了几个例子，第三版要求按固定字段输出。第三版最稳定，主要是格式不会跑偏，我保留了它。",
+    ),
+    "Q3": (
+        "最严重的是扫描件 PDF 抽出空文本却被当成有效文档入库，检索时污染结果。后来在入库前加了字符数下限和乱码率检查，不合格的直接拦下并报警。",
+        "RAG 的数据质量问题主要包括文档解析不完整、切块粒度不合理、向量化效果差等，需要建立完善的数据清洗和质量监控体系。",
+        "规章制度文档里有很多表格，直接解析会把表格拆散，导致条款对不上。我改成按条款标题切块之后好了很多。",
+    ),
+    "Q4": (
+        "选 Chroma 是因为本地起得快、无需运维，数据量只有几万条。扩大一百倍要重新看写入吞吐、过滤查询的延迟和内存占用，这三项会先撑不住，届时换 Milvus 或 pgvector。",
+        "向量数据库选型要考虑性能、扩展性、易用性和成本。Chroma 适合快速原型，大规模场景可以考虑 Milvus、Pinecone 等专业方案。",
+        "当时选 Chroma 主要是因为它轻量、能本地跑，装起来快。数据规模扩大的情况我没有实际测过。",
+    ),
+    "Q5": (
+        "两千余次是网关侧的请求数去掉健康检查和我自己的调试流量。人工抽检了其中 200 条，失败样本按检索没召回、召回了但答错、拒答三类归档。",
+        "线上指标统计要明确口径，区分请求数、会话数和用户数，同时要做好埋点和日志采集，定期进行数据校验和人工抽样检查。",
+        "两千多次是后台日志统计的请求数。抽检的部分我记得是随机看了一些答得不好的，没有严格按比例做分类统计。",
+    ),
+    "Q6": (
+        "按真实问题的意图分布分层采样，避免全是简单事实题。两个人独立标注，不一致的第三人裁决，分歧率控制在 8% 以内，并保留 20% 的边界样本。",
+        "评测集建设要保证样本的代表性和多样性，采用分层抽样方法，多人标注取一致性，同时要覆盖各种边界情况和长尾场景。",
+        "200 条是我从历史提问里挑的，尽量覆盖了不同类型的问题。标注主要是我自己做的，没有做多人交叉标注。",
+    ),
+    "Q7": (
+        "基线是上线前一周的线上意图识别准确率 71%。口径是人工复核的准确率，不是模型自评。我负责 Prompt 与评测集，模型微调是算法同事做的，12 个点是两者叠加的结果。",
+        "业务效果验证需要设立明确的基线和对照组，统计口径要保持一致，同时要区分个人贡献和团队贡献，用数据说话。",
+        "提升 12 个百分点是团队一起做的，我主要负责意图识别 Prompt 的编写和迭代，还有评测集的搭建。",
+    ),
+    "Q8": (
+        "去重规则按「用户 ID + 文本」哈希，结果把同一用户对不同商品的相同短评（如「不错」）全删了，损失了三万条有效样本。后来把商品 ID 加进哈希键，并对短文本单独放宽。",
+        "pandas 数据清洗常见问题包括去重逻辑不当、缺失值处理不合理、类型转换错误等，需要在清洗前后做好数据量和分布的对比校验。",
+        "清洗二十万条评论时主要处理了重复和空值。误伤的具体例子我印象不深了，当时是边跑边看结果调的规则。",
+    ),
+    "Q9": (
+        "先看网关的分层耗时埋点：接口层看 QPS 和连接池，检索层看向量库的 P99，模型层看上游返回时间。三段里哪段的 P99 抬起来就是哪段的问题，没有埋点就先补埋点再谈定位。",
+        "服务超时排查要分层定位，先看监控和日志，从接口层、业务层到依赖服务逐层排查，结合链路追踪工具分析各环节耗时，定位瓶颈点后针对性优化。",
+        "我会先看日志和监控，判断是模型调用慢还是检索慢。FastAPI 这块我用得不多，主要是搭接口，深入的性能排查没做过。",
+    ),
+    "Q10": (
+        "写《RAG 检索召回踩坑》那篇时，我把方案拆成「问题现象 - 定位过程 - 改动 - 验证数据」四段，每段都给可复制的配置片段，让读者不用问我就能照着跑一遍。",
+        "技术文档写作要结构清晰、层次分明，使用图表辅助说明，注意读者视角，把复杂问题拆解成易于理解的模块，并提供可执行的步骤。",
+        "我的博客主要是记录学习过程，会把原理讲一遍再贴代码。面向工程团队执行的文档写得不多，这方面经验还比较少。",
+    ),
+}
+
+# (专家, 背题党, 简历人格)。阈值见 config/thresholds.yaml：
+# expert_pass=70 / bluffer_max=50 / resume_pass=60
+SIM_SCORES = {
+    "Q1": (92, 35, 68),
+    "Q2": (90, 38, 72),
+    "Q3": (88, 32, 75),
+    "Q4": (91, 42, 65),
+    "Q5": (89, 36, 62),
+    "Q6": (93, 40, 61),
+    "Q7": (90, 34, 74),
+    "Q8": (88, 30, 63),
+    "Q9": (86, 71, 66),   # 背题党 71 > 50：靠面经即可作答，判为无区分度
+    "Q10": (87, 45, 70),
+}
+
+SIM_REASONS = {
+    "expert": "给出了具体做法、判断依据与量化结果，落在优秀档",
+    "bluffer": "只有正确但空泛的通用说法，没有任何本人做过的痕迹，落在不合格档",
+    "resume": "能讲清本人做法与基本结果，但量化验证不完整，落在合格档",
+}
+
+
+def persona_answers_payload(persona_index: int) -> dict:
+    """三个人格的作答。persona_index: 0=专家 1=背题党 2=简历人格。"""
+    return {
+        "answers": [
+            {"question_id": qid, "answer": answers[persona_index]}
+            for qid, answers in SIM_ANSWERS.items()
+        ]
+    }
+
+
+def grader_payload() -> dict:
+    """盲评结果。
+
+    标签不能手写死：`grade_blind` 每道题都按 question_id 派生一个独立的
+    标签映射，夹具必须用同一个函数反推，否则分数会记到错误的人格头上。
+    """
+    scores = []
+    for qid, (expert, bluffer, resume) in SIM_SCORES.items():
+        per_persona = {"expert": expert, "bluffer": bluffer, "resume": resume}
+        for label, persona in label_map(qid, sorted(per_persona)).items():
+            reason = SIM_REASONS[persona]
+            if persona == "bluffer" and qid == "Q9":
+                reason = "虽无个人经历，但分层排查的通用思路已覆盖题目要点，落在合格档"
+            scores.append(
+                {
+                    "question_id": qid,
+                    "label": label,
+                    "score": per_persona[persona],
+                    "reason": reason,
+                }
+            )
+    return {"scores": scores}
+
+
 class FixtureClient:
     """按主状态机的调用顺序返回人工核对过的样例响应。"""
 
@@ -263,7 +380,14 @@ def main() -> None:
         jd_payload(),
         resume_a_payload(a_id), match_a_payload(a_id),
         resume_b_payload(b_id), match_b_payload(b_id),
-        first_question_attempt, revised_question_set, followups_payload(a_id),
+        # 首轮 9 道题被数量规则判 blocker，此时**不会**触发盲评 ——
+        # 对一套即将重写的题做模拟是浪费，所以这里没有人格作答的夹具。
+        first_question_attempt, revised_question_set,
+        # 补齐到 10 道、确定性规则通过之后才进入 SIMULATE：
+        # 专家 -> 背题党 -> 简历人格 -> 盲评阅卷。
+        persona_answers_payload(0), persona_answers_payload(1), persona_answers_payload(2),
+        grader_payload(),
+        followups_payload(a_id),
     ])
 
     with tempfile.TemporaryDirectory(prefix="resume-demo-cache-") as temp:
@@ -274,7 +398,17 @@ def main() -> None:
         settings.cache_enabled = True
         # 与 call_structured 的无 client Demo 命名空间保持一致，避免评审者
         # 本机 .env 里的模型名改变后导致缓存键漂移。
+        #
+        # 快慢两档都要设成 demo-v1：回放时 `_stage_models()` 见到 DEMO_MODE 会
+        # 返回 (None, None)，所有阶段塌缩到同一个 demo 命名空间；生成时若让快阶段
+        # 用 llm_model_cheap，算出的缓存键回放永远命中不了 —— 而且失败发生在
+        # 评审者机器上，本地毫无察觉。
         settings.llm_model = "demo-v1"
+        settings.llm_model_cheap = "demo-v1"
+        # 夹具按顺序弹出，而候选人默认是并行筛选的 —— 两个线程交错取用会拿到
+        # 对方的响应。这里强制串行；缓存键由输入内容算出，与生成顺序无关，
+        # 因此回放时仍可安全并行。
+        settings.max_parallel_candidates = 1
         settings.cache_dir = temp_root / "runtime"
         settings.demo_cache_dir = temp_root / "empty-demo"
         settings.trace_dir = temp_root / "traces"
@@ -300,6 +434,14 @@ def main() -> None:
             raise AssertionError("Demo 必须展示 Checker 发现问题并完成至少一轮修订")
         if any(not stage.gate.passed for candidate in result.candidates for stage in candidate.stages):
             raise AssertionError("Demo 的每个 Checker 阶段都必须通过")
+
+        simulation = result.candidates[0].simulation
+        if simulation is None or len(simulation.diagnoses) != 10:
+            raise AssertionError("Demo 必须对全部 10 道题给出三人格盲评诊断")
+        if simulation.by_diagnosis().get("NO_DISCRIMINATION") != 1:
+            raise AssertionError("Demo 需要恰好一道被判为无区分度的题，用来展示模拟的价值")
+        if not any(i.detector == "sim" for i in question_stage.report.issues):
+            raise AssertionError("盲评诊断必须落成 detector=sim 的 Issue")
 
         target = ROOT / "data" / "demo_cache"
         target.mkdir(parents=True, exist_ok=True)

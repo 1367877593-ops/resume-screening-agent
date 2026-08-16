@@ -21,16 +21,18 @@ from agents.question_gen import generate_questions
 from agents.reviser import revise
 from agents.scorer import build_match_result, rank
 from checker.run import check_followups, check_match, check_question_set, check_resume
+from checker.simulation import simulate_question_set
 from config.settings import get_settings, get_thresholds
 from schema.document import RawDoc
 from schema.followup import FollowUpSet
-from schema.issue import CheckReport, GateResult
+from schema.issue import CheckReport, GateResult, Issue
 from schema.jd import JD
 from schema.match import MatchResult, MatchVerdicts
 from schema.question import QuestionSet
 from schema.ranking import CandidateRanking
 from schema.resume import ExtractedResume
 from schema.revision import RevisionNote
+from schema.simulation import SimulationReport
 
 
 @dataclass
@@ -42,6 +44,10 @@ class StageOutcome:
     gate: GateResult
     rounds_used: int = 0
     notes: List[RevisionNote] = field(default_factory=list)
+    # 各轮累计检出的问题。`report` 只有最后一轮，被修好的问题不在里面 ——
+    # 拿它统计「规则 vs LLM 检出占比」会把已修复的规则类检出全部漏掉，
+    # 反而显得这套校验主要靠 LLM。这个字段是那个数字的正确来源。
+    detected: List[Issue] = field(default_factory=list)
 
 
 @dataclass
@@ -52,6 +58,7 @@ class CandidateOutcome:
     match_result: MatchResult
     question_set: Optional[QuestionSet] = None
     followups: Optional[FollowUpSet] = None
+    simulation: Optional[SimulationReport] = None
     stages: List[StageOutcome] = field(default_factory=list)
 
 
@@ -60,6 +67,9 @@ class PipelineResult:
     jd: JD
     candidates: List[CandidateOutcome]
     ranking: CandidateRanking
+    # 由 pipeline.api.run() 填入，与 trace 的 run_id 是同一个，用于把
+    # 「这次运行的结果」和「这次运行发出的调用」关联起来。
+    run_id: Optional[str] = None
 
 
 def _revise_loop(
@@ -77,9 +87,11 @@ def _revise_loop(
     修完必须重新过一遍 scorer 才能得到 MatchResult —— 分数永远由代码算。
     """
     notes: List[RevisionNote] = []
+    detected: List[Issue] = []
     rounds = 0
     checked = rebuild(obj) if rebuild else obj
     report, gate = check_fn(checked, rounds)
+    detected.extend(report.issues)
 
     while not gate.passed and gate.status != "NEEDS_HUMAN_REVIEW" and rounds < max_rounds:
         rounds += 1
@@ -89,9 +101,10 @@ def _revise_loop(
         notes.extend(round_notes)
         checked = rebuild(obj) if rebuild else obj
         report, gate = check_fn(checked, rounds)
+        detected.extend(report.issues)
 
     return checked, StageOutcome(stage=stage, report=report, gate=gate,
-                                 rounds_used=rounds, notes=notes)
+                                 rounds_used=rounds, notes=notes, detected=detected)
 
 
 def _stage_models() -> Tuple[Optional[str], Optional[str]]:
@@ -140,6 +153,46 @@ def _screen_candidate(
     )
 
 
+def _question_checker(
+    jd: JD,
+    doc: RawDoc,
+    holder: Dict[str, Optional[SimulationReport]],
+    fast_model: Optional[str],
+    reasoning_model: Optional[str],
+):
+    """构造题目阶段的校验函数：SIMULATE -> CHECK。
+
+    holder 用来把最后一轮的模拟报告带出 `_revise_loop` 给 UI 用。
+    修订会重跑校验，因此也会重新模拟 —— 报告必须对应最终那套题，
+    否则热力图显示的是已经被改掉的旧题。
+    """
+
+    def check(question_set: QuestionSet, round_no: int):
+        report, gate = check_question_set(question_set, doc, round_no=round_no)
+
+        if not get_settings().simulation_enabled:
+            return report, gate
+
+        # 确定性规则已经判出 blocker（例如题目数量不足）时不做模拟：
+        # 这套题马上就要被重写，对它盲评四次纯属烧钱。
+        # 这是「确定性优先」原则的直接推论 —— 便宜的检查先跑，贵的后跑。
+        if report.count("blocker"):
+            return report, gate
+
+        holder["report"] = simulate_question_set(
+            question_set,
+            jd,
+            doc.full_text,
+            persona_model=fast_model,
+            grader_model=reasoning_model,
+        )
+        return check_question_set(
+            question_set, doc, round_no=round_no, simulation=holder["report"]
+        )
+
+    return check
+
+
 def _generate_interview(
     jd: JD,
     outcome: CandidateOutcome,
@@ -150,17 +203,19 @@ def _generate_interview(
     """按需补充一名候选人的题目与追问，重复调用时保持幂等。"""
     doc = outcome.resume_doc
     if outcome.question_set is None:
+        holder: Dict[str, Optional[SimulationReport]] = {"report": None}
         qs, q_stage = _revise_loop(
             generate_questions(
                 jd, outcome.match_result, doc, model=fast_model
             ),
-            lambda o, r, d=doc: check_question_set(o, d, round_no=r),
+            _question_checker(jd, doc, holder, fast_model, reasoning_model),
             stage="question_set",
             source_text=doc.full_text,
             max_rounds=max_rounds,
             revision_model=reasoning_model,
         )
         outcome.question_set = qs
+        outcome.simulation = holder["report"]
         outcome.stages.append(q_stage)
 
     if outcome.followups is None:

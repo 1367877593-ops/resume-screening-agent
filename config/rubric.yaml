@@ -41,9 +41,10 @@ dimensions:
     detector: rule / sim
     issue_codes:
       Q_DUPLICATE:            { severity: major,   desc: 题干高度相似，重复考察 }
-      # 以下由 L2 三人格模拟产出
+      # 以下由三人格盲评模拟产出，detector = sim，判定表在 checker/simulation/diagnose.py
       Q_NO_DISCRIMINATION:    { severity: major,   desc: 背题党也能答出，无区分度 }
       Q_UNANSWERABLE:         { severity: major,   desc: 理想专家也答不出，题目本身有问题 }
+      Q_OUT_OF_RANGE:         { severity: minor,   desc: 有区分度但超出该候选人简历的射程 }
 
   语义一致性:
     description: 前四类规则判不了时才调 LLM

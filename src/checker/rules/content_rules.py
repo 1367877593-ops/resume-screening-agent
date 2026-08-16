@@ -164,6 +164,55 @@ def rule_questions_are_not_duplicates(ctx: RuleContext) -> List[Issue]:
     return issues
 
 
+@register("question_set")
+def rule_simulation_flags_weak_questions(ctx: RuleContext) -> List[Issue]:
+    """把三人格盲评的诊断结论翻译成 Issue（detector = sim）。
+
+    这条规则自己不作答也不打分 —— 模拟在 `checker/simulation/` 里跑完，
+    这里只做映射。好处是规则表仍然全是纯函数，可以脱离 LLM 单测。
+
+    严重度的取法：无区分度和坏题都是**题目的缺陷**，判 major，攒够三条
+    就会触发 FAIL 与重写；超出射程更像是「这道题留给下一轮面试」的提示，
+    判 minor，让它出现在报告里但不阻断流程。
+    """
+    if ctx.simulation is None:
+        return []
+
+    spec = {
+        "NO_DISCRIMINATION": (
+            "Q_NO_DISCRIMINATION",
+            "major",
+            "换成必须结合本人经历才能回答的问法，例如追问具体取舍、量化结果或失败案例",
+        ),
+        "BROKEN": (
+            "Q_UNANSWERABLE",
+            "major",
+            "重写题干：补齐作答所需的前提，或拆成能明确回答的小问题",
+        ),
+        "OUT_OF_RANGE": (
+            "Q_OUT_OF_RANGE",
+            "minor",
+            "可保留作为拔高题，或替换为简历中确有着落的考察点",
+        ),
+    }
+
+    issues: List[Issue] = []
+    for d in ctx.simulation.problem_questions():
+        code, severity, suggestion = spec[d.diagnosis]
+        issues.append(
+            Issue(
+                issue_code=code,
+                severity=severity,
+                detector="sim",
+                dimension="题目质量",
+                message=f"{d.question_id}：{d.detail}",
+                target_path=f"questions[{d.question_id}]",
+                suggestion=suggestion,
+            )
+        )
+    return issues
+
+
 # ------------------------------------------------------------------ 追问
 
 

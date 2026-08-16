@@ -29,12 +29,20 @@ class Settings(BaseSettings):
     # 给单次请求设置硬上限，避免异常输出持续消耗额度。
     llm_max_output_tokens: int = 8192
 
+    # ---- L2 三人格盲评 ----
+    # 每套题多花 4 次调用（3 次作答 + 1 次盲评）。关掉不影响 L1 闭环，
+    # 只是题目质量维度退回「查重」这一条确定性规则。
+    simulation_enabled: bool = True
+
     # ---- 运行模式 ----
     # DEMO_MODE=1 时强制走 data/demo_cache/ 回放，未命中显式报错，绝不静默回退
     demo_mode: bool = False
     cache_enabled: bool = True
 
     # ---- 存储 ----
+    # 落库的 payload 里含简历原文。公网部署时多人共用同一份库，且平台文件系统
+    # 通常是临时的 —— 既不安全也留不住，那种场景应置 0，只在内存里出结果。
+    persist_runs: bool = True
     db_path: Path = Path("data/runtime/app.db")
     trace_dir: Path = Path("data/runtime/traces")
     cache_dir: Path = Path("data/runtime/cache")

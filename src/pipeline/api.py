@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from config.settings import ROOT, get_settings
-from harness.trace import read_traces, summarize
+from harness.structured import start_run
+from harness.trace import new_run_id, read_traces, summarize
 from ingest.loader import load_file, load_text
 from schema.document import RawDoc
 from store.repository import list_runs, load_run, save_run
@@ -74,6 +75,11 @@ def run(
     generate_interview: bool = True,
 ) -> PipelineResult:
     settings = get_settings()
+    # run_id 在开跑前就定下来，trace、落库 payload 和 UI 展示共用同一个。
+    # 否则 trace 自己生成一个、payload 再生成一个，两边对不上，
+    # 事后拿着一条历史记录查不到它当时发出的调用。
+    run_id = new_run_id()
+    start_run(run_id)
     if not jd_text.strip():
         raise ValueError("JD 不能为空")
     if not resumes:
@@ -87,11 +93,13 @@ def run(
     if total_bytes > max_bytes:
         raise ValueError(f"简历总大小不能超过 {settings.max_total_upload_mb} MB")
     jd_doc = load_text(jd_text, filename="jd")
-    return run_pipeline(
+    result = run_pipeline(
         jd_doc,
         [_to_doc(u) for u in resumes],
         include_interview=generate_interview,
     )
+    result.run_id = run_id
+    return result
 
 
 def generate_interview(result: PipelineResult, resume_id: str) -> PipelineResult:
@@ -126,7 +134,8 @@ def _overall_gate(outcome: CandidateOutcome) -> str:
 def result_to_dict(result: PipelineResult, run_id: Optional[str] = None) -> Dict[str, Any]:
     gate_by_id = {o.resume_id: _overall_gate(o) for o in result.candidates}
     return {
-        "run_id": run_id or uuid.uuid4().hex[:12],
+        # 默认沿用 run() 定下的那个，让 payload 与 trace 对得上
+        "run_id": run_id or result.run_id or uuid.uuid4().hex[:12],
         "jd": result.jd.model_dump(mode="json"),
         "ranking": [
             {**item.model_dump(mode="json"), "gate_status": gate_by_id.get(item.resume_id)}
@@ -140,12 +149,17 @@ def result_to_dict(result: PipelineResult, run_id: Optional[str] = None) -> Dict
                 "match": o.match_result.model_dump(mode="json"),
                 "questions": o.question_set.model_dump(mode="json") if o.question_set else None,
                 "followups": o.followups.model_dump(mode="json") if o.followups else None,
+                "simulation": o.simulation.model_dump(mode="json") if o.simulation else None,
                 "stages": [
                     {
                         "stage": s.stage,
                         "rounds_used": s.rounds_used,
                         "gate": s.gate.model_dump(mode="json"),
                         "issues": [i.model_dump(mode="json") for i in s.report.issues],
+                        # 各轮累计检出（含已修复的）。UI 展示的是最终状态，
+                        # 但「检出占比」这类统计必须用这一份，否则会漏掉
+                        # 所有被修好的问题。
+                        "detected_issues": [i.model_dump(mode="json") for i in s.detected],
                         "notes": [n.model_dump(mode="json") for n in s.notes],
                     }
                     for s in o.stages
@@ -157,8 +171,19 @@ def result_to_dict(result: PipelineResult, run_id: Optional[str] = None) -> Dict
 
 
 def persist(result: PipelineResult, run_id: Optional[str] = None) -> str:
-    """保存或更新一次运行；按需出题后沿用原 run_id，不制造重复记录。"""
-    return save_run(result_to_dict(result, run_id=run_id))
+    """保存或更新一次运行；按需出题后沿用原 run_id，不制造重复记录。
+
+    `PERSIST_RUNS=0` 时跳过落库并原样返回 run_id —— 界面照常工作，
+    只是这次结果不留在磁盘上。公网演示应该走这条路径。
+    """
+    payload = result_to_dict(result, run_id=run_id)
+    if not get_settings().persist_runs:
+        return payload["run_id"]
+    return save_run(payload)
+
+
+def persistence_enabled() -> bool:
+    return get_settings().persist_runs
 
 
 def history(limit: int = 20) -> List[Dict[str, Any]]:
@@ -172,14 +197,22 @@ def load(run_id: str) -> Optional[Dict[str, Any]]:
 # ------------------------------------------------------------------ trace
 
 
-def trace_stats() -> Dict[str, Any]:
+def trace_stats(run_id: Optional[str] = None) -> Dict[str, Any]:
+    """`run_id` 为 None 时统计全部历史。
+
+    UI 默认传本次运行的 run_id：读整个目录算出来的是历次运行的平均值，
+    跑第二次 Demo 时「一次成功率」会莫名其妙地变，那只是把上一次也算进来了。
+    """
     s = get_settings()
-    return summarize(read_traces(s.resolve(s.trace_dir)))
+    return summarize(read_traces(s.resolve(s.trace_dir), run_id=run_id))
 
 
-def trace_rows(limit: int = 200) -> List[Dict[str, Any]]:
+def trace_rows(limit: int = 200, run_id: Optional[str] = None) -> List[Dict[str, Any]]:
     s = get_settings()
-    rows = [r for r in read_traces(s.resolve(s.trace_dir)) if r.get("event") == "structured_call"]
+    rows = [
+        r for r in read_traces(s.resolve(s.trace_dir), run_id=run_id)
+        if r.get("event") == "structured_call"
+    ]
     return rows[-limit:]
 
 
@@ -195,4 +228,6 @@ def runtime_mode() -> Dict[str, Any]:
         "access_control": bool(s.app_access_code),
         "cache_enabled": s.cache_enabled,
         "max_parallel_candidates": s.max_parallel_candidates,
+        "simulation_enabled": s.simulation_enabled,
+        "persist_runs": s.persist_runs,
     }

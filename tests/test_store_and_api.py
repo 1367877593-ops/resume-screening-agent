@@ -120,6 +120,9 @@ def wired(monkeypatch, tmp_path):
     monkeypatch.setattr(s, "trace_dir", tmp_path / "traces", raising=False)
     monkeypatch.setattr(s, "db_path", tmp_path / "app.db", raising=False)
     monkeypatch.setattr(structured, "_default_tracer", None, raising=False)
+    # 这一组测的是 L1 主干与 UI 数据契约。三人格盲评每轮多 4 次调用，
+    # 放进来只会让脚本变长而测不到新东西 —— L2 的覆盖在 test_simulation.py。
+    monkeypatch.setattr(s, "simulation_enabled", False, raising=False)
 
     def _wire(payloads):
         client = QueueClient(payloads)
@@ -235,7 +238,7 @@ def test_payload_contains_every_key_the_views_read(wired):
 
     cand = payload["candidates"][item["resume_id"]]
     assert {"resume", "resume_text", "filename", "match", "questions",
-            "followups", "stages"} <= set(cand)
+            "followups", "simulation", "stages"} <= set(cand)
     assert {"total_score", "verdicts", "recommendation",
             "recommendation_reason"} <= set(cand["match"])
     assert {"requirement_id", "satisfied", "score", "reason", "evidence"} <= set(
@@ -244,7 +247,8 @@ def test_payload_contains_every_key_the_views_read(wired):
             "source_requirement_ids", "evidence"} <= set(cand["questions"]["questions"][0])
     assert {"followup_id", "text", "ambiguity_point_id", "intent"} <= set(
         cand["followups"]["questions"][0])
-    assert {"stage", "rounds_used", "gate", "issues", "notes"} <= set(cand["stages"][0])
+    assert {"stage", "rounds_used", "gate", "issues", "notes",
+            "detected_issues"} <= set(cand["stages"][0])
 
 
 def test_rejected_candidate_gets_no_questions(wired):
@@ -305,3 +309,56 @@ def test_run_rejects_oversized_total_upload(monkeypatch):
 
     with pytest.raises(ValueError, match="简历总大小不能超过 0 MB"):
         api.run("JD", [("a.txt", b"a")])
+
+
+# ============================================================ run_id 与落库开关
+
+
+def test_run_id_links_payload_to_its_own_trace(wired, tmp_path):
+    """payload 的 run_id 与 trace 的 run_id 必须是同一个。
+
+    两边各生成一个的话，拿着一条历史记录查不到它当时发出的调用 ——
+    「可回溯」就只是嘴上说说。
+    """
+    from harness.trace import read_traces
+
+    wired([_jd(), _resume(), _verdicts(), _questions(), _followups()])
+    result = api.run("JD", [("r.txt", RESUME_TEXT.encode())])
+    payload = api.result_to_dict(result)
+
+    assert payload["run_id"] == result.run_id
+    rows = read_traces(tmp_path / "traces", run_id=result.run_id)
+    assert rows, "这次运行的调用没有落到自己的 run_id 名下"
+    assert {r["run_id"] for r in rows} == {result.run_id}
+    assert api.trace_stats(result.run_id)["calls"] == len(rows)
+
+
+def test_second_run_does_not_inflate_the_first_ones_stats(wired):
+    """两次运行的统计必须互不干扰。"""
+    wired([_jd(), _resume(), _verdicts(), _questions(), _followups()])
+    first = api.run("JD", [("r.txt", RESUME_TEXT.encode())])
+    first_calls = api.trace_stats(first.run_id)["calls"]
+
+    wired([_jd(), _resume(), _verdicts(), _questions(), _followups()])
+    second = api.run("JD 第二版", [("r.txt", RESUME_TEXT.encode())])
+
+    assert first.run_id != second.run_id
+    assert api.trace_stats(first.run_id)["calls"] == first_calls
+    assert api.trace_stats()["calls"] > first_calls   # 不传 run_id 才是历史累计
+
+
+def test_persist_runs_off_skips_the_database(wired, monkeypatch):
+    """公网部署时落库要能整体关掉：payload 含简历原文，多人共用一份库。"""
+    from config.settings import get_settings
+
+    wired([_jd(), _resume(), _verdicts(), _questions(), _followups()])
+    monkeypatch.setattr(get_settings(), "persist_runs", False, raising=False)
+
+    result = api.run("JD", [("r.txt", RESUME_TEXT.encode())])
+    run_id = api.persist(result)
+
+    # 界面照常拿到 run_id，只是磁盘上什么都没留下
+    assert run_id == result.run_id
+    assert api.load(run_id) is None
+    assert api.history() == []
+    assert not api.persistence_enabled()

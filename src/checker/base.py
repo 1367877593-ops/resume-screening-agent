@@ -17,6 +17,7 @@ from schema.jd import JD
 from schema.match import MatchResult
 from schema.question import QuestionSet
 from schema.resume import ExtractedResume
+from schema.simulation import SimulationReport
 
 
 @dataclass
@@ -33,6 +34,9 @@ class RuleContext:
     match_result: Optional[MatchResult] = None
     question_set: Optional[QuestionSet] = None
     followups: Optional[FollowUpSet] = None
+    # 三人格盲评的诊断结论（L2）。模拟本身在 checker/simulation/ 里完成，
+    # 规则只负责把结论翻译成 Issue —— 规则函数不发起 LLM 调用。
+    simulation: Optional[SimulationReport] = None
     extra: Dict = field(default_factory=dict)
 
 
