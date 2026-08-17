@@ -17,7 +17,7 @@ from config.settings import ROOT, get_settings
 from flywheel.retrieve import retrieve
 from harness.structured import start_run
 from harness.trace import new_run_id, read_traces, summarize
-from ingest.loader import load_file, load_text
+from ingest.loader import content_doc_id, load_file, load_text
 from schema.document import RawDoc
 from store.repository import list_runs, load_run, save_run, top_candidates
 
@@ -55,19 +55,26 @@ def is_sample_input(jd_text: str, resumes: Sequence[Upload]) -> bool:
 
 
 def _to_doc(upload: Upload) -> RawDoc:
-    """上传的是字节流，pdf/docx 解析需要真实文件，落到临时目录再读。"""
+    """上传的是字节流，pdf/docx 解析需要真实文件，落到临时目录再读。
+
+    doc_id 必须由「原始文件名 + 内容」派生，绝不能掺进临时路径：doc_id 会随
+    prompt 一起进缓存键，掺了随机路径就等于同一份简历每次上传都是一份新文档 ——
+    缓存永远命不中，模型每次重新判定，同一个人两次跑出不同的分数。
+    """
     name, data = upload
     suffix = Path(name).suffix.lower()
+    did = content_doc_id(name, data)
     if suffix in (".txt", ".md"):
-        return load_text(data.decode("utf-8", errors="replace"), filename=name)
+        return load_text(
+            data.decode("utf-8", errors="replace"), filename=name, doc_id=did
+        )
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
         f.write(data)
         tmp = Path(f.name)
     try:
-        doc = load_file(tmp)
+        return load_file(tmp, filename=name, doc_id=did)
     finally:
         tmp.unlink(missing_ok=True)
-    return doc.model_copy(update={"filename": name})
 
 
 def run(

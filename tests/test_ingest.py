@@ -172,3 +172,49 @@ def test_load_text_normalizes_and_chunks():
 
     assert "\r" not in doc.full_text
     assert doc.chunks
+
+
+# ------------------------------------------------------------------ doc_id 稳定性
+
+
+def test_uploaded_file_gets_a_stable_doc_id(tmp_path):
+    """同一份上传文件每次都必须得到同一个 doc_id。
+
+    这是一个真实踩过的坑：pdf/docx 要落到临时文件才能解析，而临时路径每次
+    随机。此前 doc_id 由路径派生，于是同一份简历每次上传都是一份「新文档」——
+    doc_id 会随 prompt 进缓存键，结果缓存永远命不中、模型每次重新判定，
+    同一个人两次跑出不同的分数。
+    """
+    from pipeline.api import _to_doc
+
+    docx = pytest.importorskip("docx")
+    doc = docx.Document()
+    doc.add_paragraph("张三")
+    doc.add_paragraph("熟悉 Python，掌握 pandas")
+    path = tmp_path / "resume.docx"
+    doc.save(str(path))
+    data = path.read_bytes()
+
+    ids = {_to_doc(("简历.docx", data)).doc_id for _ in range(3)}
+
+    assert len(ids) == 1, "同一份文件多次上传得到了不同的 doc_id"
+
+
+def test_doc_id_follows_content_and_name_not_location(tmp_path):
+    from ingest.loader import content_doc_id
+
+    data = b"same bytes"
+    assert content_doc_id("a.docx", data) == content_doc_id("a.docx", data)
+    # 同名不同内容要区分开
+    assert content_doc_id("a.docx", data) != content_doc_id("a.docx", b"other")
+    # 同内容不同人要区分开：两份一样的简历仍是两位候选人
+    assert content_doc_id("a.docx", data) != content_doc_id("b.docx", data)
+
+
+def test_uploaded_text_and_binary_paths_agree_on_doc_id():
+    """txt 走内存、docx 走临时文件，两条路径必须用同一套 doc_id 规则。"""
+    from ingest.loader import content_doc_id
+    from pipeline.api import _to_doc
+
+    data = "张三\n熟悉 Python".encode()
+    assert _to_doc(("简历.txt", data)).doc_id == content_doc_id("简历.txt", data)

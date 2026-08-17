@@ -52,7 +52,19 @@ def load_text(text: str, filename: str = "input.txt", doc_id: Optional[str] = No
     return RawDoc(doc_id=did, filename=filename, full_text=full, chunks=chunk_text(did, full))
 
 
-def load_file(path) -> RawDoc:
+def content_doc_id(filename: str, data: bytes) -> str:
+    """由「原始文件名 + 内容」派生 doc_id，与文件落在哪里无关。
+
+    上传的 pdf/docx 需要落到临时文件才能解析，而临时路径每次都不一样。
+    若用路径参与派生，同一份简历每次上传都会得到不同的 doc_id ——
+    而 doc_id 会进 prompt，于是缓存永远命不中、模型每次重答、分数跟着漂。
+    """
+    digest = hashlib.sha1(data).hexdigest()
+    return _doc_id(f"{filename}:{digest}")
+
+
+def load_file(path, filename: Optional[str] = None, doc_id: Optional[str] = None) -> RawDoc:
+    """`filename` / `doc_id` 用于上传场景：真实身份由调用方给，不取临时路径。"""
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix not in SUPPORTED:
@@ -70,4 +82,5 @@ def load_file(path) -> RawDoc:
             f"{path.name} 未能提取到任何文本。"
             "扫描件或图片型 PDF 需要 OCR，当前版本不支持。"
         )
-    return load_text(raw, filename=path.name, doc_id=_doc_id(str(path) + raw[:200]))
+    name = filename or path.name
+    return load_text(raw, filename=name, doc_id=doc_id or _doc_id(str(path) + raw[:200]))
