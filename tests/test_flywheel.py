@@ -85,14 +85,20 @@ def test_issue_without_guidance_is_skipped(tmp_path):
     assert [x.issue_code for x in kept] == ["Q_DUPLICATE"]
 
 
-def test_capacity_is_capped_per_job(tmp_path):
-    """经验库不是日志。prompt 里塞五十条告诫，模型一条都不会认真看。"""
-    from flywheel.lessons import _GUIDANCE
+def test_capacity_is_capped_per_job(tmp_path, monkeypatch):
+    """经验库不是日志。prompt 里塞五十条告诫，模型一条都不会认真看。
+
+    告诫表用临时的合成条目：真实表有多少条是偶然的，随 issue_code 增删变化，
+    容量控制本身不该因为那个数字恰好小于上限就测不到。
+    """
+    from flywheel import lessons as lessons_mod
+
+    codes = [f"SYNTHETIC_{i:02d}" for i in range(MAX_PER_JOB + 3)]
+    monkeypatch.setattr(
+        lessons_mod, "_GUIDANCE", {c: f"合成告诫 {c}" for c in codes}, raising=True
+    )
 
     p = tmp_path / "lessons.jsonl"
-    codes = list(_GUIDANCE)[: MAX_PER_JOB + 3]
-    assert len(codes) > MAX_PER_JOB, "告诫表太短，测不出容量控制"
-
     kept = record("job-a", [_issue(c) for c in codes], {}, path=p)
 
     assert len(kept) == MAX_PER_JOB

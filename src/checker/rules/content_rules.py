@@ -129,9 +129,8 @@ def rule_match_evidence_is_grounded(ctx: RuleContext) -> List[Issue]:
 def rule_semantic_contradictions(ctx: RuleContext) -> List[Issue]:
     """把语义校验的结论翻译成 Issue（detector = llm）。
 
-    和盲评那条规则一样，这里只做映射，不发起调用 —— 规则表整体保持纯函数，
-    可以脱离 LLM 单测。真正的调用在 `checker/semantic.py`，且只在确定性
-    规则全过之后才会发生。
+    这里只做映射，不发起调用 —— 规则表整体保持纯函数，可以脱离 LLM 单测。
+    真正的调用在 `checker/semantic.py`，且只在确定性规则全过之后才会发生。
 
     判 major 而不是 blocker：语义判断本身有误报可能，让它进报告、攒够三条
     才触发重写，比一条就打回要稳。
@@ -188,55 +187,6 @@ def rule_questions_are_not_duplicates(ctx: RuleContext) -> List[Issue]:
                         suggestion="替换其中一道，改考尚未覆盖的要求项",
                     )
                 )
-    return issues
-
-
-@register("question_set")
-def rule_simulation_flags_weak_questions(ctx: RuleContext) -> List[Issue]:
-    """把三人格盲评的诊断结论翻译成 Issue（detector = sim）。
-
-    这条规则自己不作答也不打分 —— 模拟在 `checker/simulation/` 里跑完，
-    这里只做映射。好处是规则表仍然全是纯函数，可以脱离 LLM 单测。
-
-    严重度的取法：无区分度和坏题都是**题目的缺陷**，判 major，攒够三条
-    就会触发 FAIL 与重写；超出射程更像是「这道题留给下一轮面试」的提示，
-    判 minor，让它出现在报告里但不阻断流程。
-    """
-    if ctx.simulation is None:
-        return []
-
-    spec = {
-        "NO_DISCRIMINATION": (
-            "Q_NO_DISCRIMINATION",
-            "major",
-            "换成必须结合本人经历才能回答的问法，例如追问具体取舍、量化结果或失败案例",
-        ),
-        "BROKEN": (
-            "Q_UNANSWERABLE",
-            "major",
-            "重写题干：补齐作答所需的前提，或拆成能明确回答的小问题",
-        ),
-        "OUT_OF_RANGE": (
-            "Q_OUT_OF_RANGE",
-            "minor",
-            "可保留作为拔高题，或替换为简历中确有着落的考察点",
-        ),
-    }
-
-    issues: List[Issue] = []
-    for d in ctx.simulation.problem_questions():
-        code, severity, suggestion = spec[d.diagnosis]
-        issues.append(
-            Issue(
-                issue_code=code,
-                severity=severity,
-                detector="sim",
-                dimension="题目质量",
-                message=f"{d.question_id}：{d.detail}",
-                target_path=f"questions[{d.question_id}]",
-                suggestion=suggestion,
-            )
-        )
     return issues
 
 

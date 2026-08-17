@@ -22,7 +22,6 @@ from agents.reviser import revise
 from agents.scorer import build_match_result, rank
 from checker.run import check_followups, check_match, check_question_set, check_resume
 from checker.semantic import check_match_semantics
-from checker.simulation import simulate_question_set
 from config.settings import get_settings, get_thresholds
 from flywheel import record
 from schema.document import RawDoc
@@ -36,7 +35,6 @@ from schema.ranking import CandidateRanking
 from schema.resume import ExtractedResume
 from schema.revision import RevisionNote
 from schema.semantic import SemanticReport
-from schema.simulation import SimulationReport
 
 
 @dataclass
@@ -62,7 +60,6 @@ class CandidateOutcome:
     match_result: MatchResult
     question_set: Optional[QuestionSet] = None
     followups: Optional[FollowUpSet] = None
-    simulation: Optional[SimulationReport] = None
     semantic: Optional[SemanticReport] = None
     stages: List[StageOutcome] = field(default_factory=list)
 
@@ -189,46 +186,6 @@ def _match_checker(
     return check
 
 
-def _question_checker(
-    jd: JD,
-    doc: RawDoc,
-    holder: Dict[str, Optional[SimulationReport]],
-    fast_model: Optional[str],
-    reasoning_model: Optional[str],
-):
-    """构造题目阶段的校验函数：SIMULATE -> CHECK。
-
-    holder 用来把最后一轮的模拟报告带出 `_revise_loop` 给 UI 用。
-    修订会重跑校验，因此也会重新模拟 —— 报告必须对应最终那套题，
-    否则热力图显示的是已经被改掉的旧题。
-    """
-
-    def check(question_set: QuestionSet, round_no: int):
-        report, gate = check_question_set(question_set, doc, round_no=round_no)
-
-        if not get_settings().simulation_enabled:
-            return report, gate
-
-        # 确定性规则已经判出 blocker（例如题目数量不足）时不做模拟：
-        # 这套题马上就要被重写，对它盲评四次纯属烧钱。
-        # 这是「确定性优先」原则的直接推论 —— 便宜的检查先跑，贵的后跑。
-        if report.count("blocker"):
-            return report, gate
-
-        holder["report"] = simulate_question_set(
-            question_set,
-            jd,
-            doc.full_text,
-            persona_model=fast_model,
-            grader_model=reasoning_model,
-        )
-        return check_question_set(
-            question_set, doc, round_no=round_no, simulation=holder["report"]
-        )
-
-    return check
-
-
 def _generate_interview(
     jd: JD,
     outcome: CandidateOutcome,
@@ -239,19 +196,17 @@ def _generate_interview(
     """按需补充一名候选人的题目与追问，重复调用时保持幂等。"""
     doc = outcome.resume_doc
     if outcome.question_set is None:
-        holder: Dict[str, Optional[SimulationReport]] = {"report": None}
         qs, q_stage = _revise_loop(
             generate_questions(
                 jd, outcome.match_result, doc, model=fast_model
             ),
-            _question_checker(jd, doc, holder, fast_model, reasoning_model),
+            lambda o, r, d=doc: check_question_set(o, d, round_no=r),
             stage="question_set",
             source_text=doc.full_text,
             max_rounds=max_rounds,
             revision_model=reasoning_model,
         )
         outcome.question_set = qs
-        outcome.simulation = holder["report"]
         outcome.stages.append(q_stage)
 
     if outcome.followups is None:

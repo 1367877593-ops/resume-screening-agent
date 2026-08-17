@@ -39,11 +39,6 @@ class Settings(BaseSettings):
     # 只在确定性规则全过之后才跑；关掉不影响主闭环。
     semantic_check_enabled: bool = True
 
-    # ---- L2 三人格盲评 ----
-    # 每套题多花 4 次调用（3 次作答 + 1 次盲评）。关掉不影响 L1 闭环，
-    # 只是题目质量维度退回「查重」这一条确定性规则。
-    simulation_enabled: bool = True
-
     # ---- 运行模式 ----
     # DEMO_MODE=1 时强制走 data/demo_cache/ 回放，未命中显式报错，绝不静默回退
     demo_mode: bool = False

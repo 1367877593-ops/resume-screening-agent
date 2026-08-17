@@ -59,57 +59,6 @@ def test_bundled_demo_runs_full_l1_without_live_client(monkeypatch, tmp_path):
     assert not (tmp_path / "runtime-cache").exists()
 
 
-def test_bundled_demo_shows_persona_simulation_catching_a_weak_question(monkeypatch, tmp_path):
-    """内置 Demo 必须展示三人格盲评抓出自己生成的弱题。
-
-    Demo 刻意不做成一份完美结果：其中一道通用故障排查题背题党也能答好，
-    盲评据此判为无区分度。评审者看到的是机制在工作，而不是一份摆拍的报告。
-    """
-    get_settings.cache_clear()
-    settings = get_settings()
-    monkeypatch.setattr(settings, "demo_mode", True, raising=False)
-    monkeypatch.setattr(settings, "demo_cache_dir", ROOT / "data" / "demo_cache", raising=False)
-    monkeypatch.setattr(settings, "cache_dir", tmp_path / "runtime-cache", raising=False)
-    monkeypatch.setattr(settings, "lessons_path", tmp_path / "lessons.jsonl", raising=False)
-    monkeypatch.setattr(settings, "trace_dir", tmp_path / "traces", raising=False)
-    monkeypatch.setattr(structured, "_default_tracer", None, raising=False)
-    monkeypatch.setattr(
-        structured,
-        "get_client",
-        lambda _settings: (_ for _ in ()).throw(AssertionError("Demo 不应初始化真实客户端")),
-    )
-
-    jd_text, resumes = api.sample_inputs()
-    payload = api.result_to_dict(api.run(jd_text, resumes))
-    advanced = payload["candidates"][payload["ranking"][0]["resume_id"]]
-
-    simulation = advanced["simulation"]
-    assert simulation is not None, "题目页的热力图依赖这个字段"
-    assert len(simulation["diagnoses"]) == 10
-
-    counts: dict = {}
-    for d in simulation["diagnoses"]:
-        counts[d["diagnosis"]] = counts.get(d["diagnosis"], 0) + 1
-    assert counts["NO_DISCRIMINATION"] == 1
-    assert counts["GOOD"] == 9
-
-    weak = next(d for d in simulation["diagnoses"] if d["diagnosis"] == "NO_DISCRIMINATION")
-    assert weak["bluffer_score"] > settings_thresholds()["simulation"]["bluffer_max"]
-
-    # 诊断必须落成 detector=sim 的 Issue，否则 gate 看不到它
-    question_stage = next(s for s in advanced["stages"] if s["stage"] == "question_set")
-    sim_issues = [i for i in question_stage["issues"] if i["detector"] == "sim"]
-    assert [i["issue_code"] for i in sim_issues] == ["Q_NO_DISCRIMINATION"]
-    # 1 个 major -> CONDITIONAL_PASS：报告里留痕，但不阻断流程
-    assert question_stage["gate"]["status"] == "CONDITIONAL_PASS"
-
-
-def settings_thresholds() -> dict:
-    from config.settings import get_thresholds
-
-    return get_thresholds()
-
-
 def test_sample_input_preflight_distinguishes_custom_data():
     jd_text, resumes = api.sample_inputs()
 
@@ -122,7 +71,7 @@ def test_detected_issues_keep_the_fixed_ones_for_statistics(monkeypatch, tmp_pat
     """已修复的问题必须留在 detected_issues 里。
 
     「规则 vs LLM 检出占比」是 README 公开承诺的数字。如果只统计最终报告，
-    第 0 轮被规则抓到、随后修好的那些会全部消失，占比会系统性地偏向 LLM/sim，
+    第 0 轮被规则抓到、随后修好的那些会全部消失，占比会系统性地偏向 LLM，
     把这套校验说得比实际更不可信。
     """
     get_settings.cache_clear()
@@ -141,19 +90,15 @@ def test_detected_issues_keep_the_fixed_ones_for_statistics(monkeypatch, tmp_pat
 
     codes = {i["issue_code"] for i in stage["detected_issues"]}
     assert "Q_COUNT_LT_MIN" in codes, "第 0 轮被规则检出并修好的问题不能从统计里消失"
-    assert "Q_NO_DISCRIMINATION" in codes
-    # 最终报告里只剩没修的那条
-    assert {i["issue_code"] for i in stage["issues"]} == {"Q_NO_DISCRIMINATION"}
-
-    detectors = {i["detector"] for i in stage["detected_issues"]}
-    assert detectors == {"rule", "sim"}
+    # 修好之后最终报告里就不该再有它
+    assert "Q_COUNT_LT_MIN" not in {i["issue_code"] for i in stage["issues"]}
 
 
-def test_demo_covers_three_of_four_diagnosis_outcomes(monkeypatch, tmp_path):
-    """真值表里的档位要在 Demo 里真的出现，不能只写在文档表格里。
+def test_every_question_states_what_it_probes_and_why(monkeypatch, tmp_path):
+    """每道题都必须交代考察点与出题原因。
 
-    李明那道通用故障排查题背题党也能答（无区分度），陈涛那道向量检索题
-    他简历里明说没用过（超出射程）—— 两种不合格的原因完全不同。
+    面试官是照着这两项决定要不要问的。缺任何一项，题目就只是一句话，
+    无从判断该不该问、答成什么样算过关。
     """
     get_settings.cache_clear()
     settings = get_settings()
@@ -167,13 +112,12 @@ def test_demo_covers_three_of_four_diagnosis_outcomes(monkeypatch, tmp_path):
     jd_text, resumes = api.sample_inputs()
     payload = api.result_to_dict(api.run(jd_text, resumes))
 
-    seen = set()
     for cand in payload["candidates"].values():
-        if cand.get("simulation"):
-            seen |= {d["diagnosis"] for d in cand["simulation"]["diagnoses"]}
-
-    assert {"GOOD", "NO_DISCRIMINATION", "OUT_OF_RANGE"} <= seen
-    # BROKEN 需要构造一道专家都答不出的题，样例里没有，如实不断言
+        if not cand["questions"]:
+            continue
+        for q in cand["questions"]["questions"]:
+            assert q["skill_point"], f'{q["question_id"]} 缺考察点'
+            assert q["rationale"], f'{q["question_id"]} 缺出题原因'
 
 
 def test_history_and_cross_batch_query_are_reachable(monkeypatch, tmp_path):
@@ -203,10 +147,10 @@ def test_history_and_cross_batch_query_are_reachable(monkeypatch, tmp_path):
     assert top[0]["total_score"] > top[1]["total_score"]
 
 
-def test_demo_exercises_all_three_detectors(monkeypatch, tmp_path):
-    """rule / sim / llm 三种检出来源都要在内置样例里真的出现。
+def test_demo_exercises_both_detectors(monkeypatch, tmp_path):
+    """rule 与 llm 两种检出来源都要在内置样例里真的出现。
 
-    「规则 vs LLM 检出占比」是 README 公开的数字。三档里有任何一档从未被
+    「规则 vs LLM 检出占比」是 README 公开的数字。两档里有任何一档从未被
     触发过，这个占比就说明不了什么 —— 只能证明那条路径没写或没跑。
     """
     get_settings.cache_clear()
@@ -227,7 +171,7 @@ def test_demo_exercises_all_three_detectors(monkeypatch, tmp_path):
         for s in c["stages"]
         for i in s["detected_issues"]
     }
-    assert detectors == {"rule", "sim", "llm"}
+    assert detectors == {"rule", "llm"}
 
 
 def test_semantic_check_catches_evidence_that_cannot_support_the_verdict(monkeypatch, tmp_path):
@@ -310,6 +254,5 @@ def test_flywheel_prevents_the_same_mistake_on_the_second_run(monkeypatch, tmp_p
 
     lessons = {x.issue_code: x for x in load_all(tmp_path / "lessons.jsonl")}
     assert "Q_COUNT_LT_MIN" in lessons
-    # 这条只犯过一次，之后没再复发；其余是主观质量问题，仍在复发
+    # 只犯过一次：经验注入后第二、三轮都没再复发，这正是飞轮起作用的证据
     assert lessons["Q_COUNT_LT_MIN"].hits == 1
-    assert lessons["Q_NO_DISCRIMINATION"].hits == 3

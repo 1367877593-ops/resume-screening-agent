@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from schema.document import SourceSpan
 
 Severity = Literal["blocker", "major", "minor"]
-Detector = Literal["rule", "llm", "sim"]
+Detector = Literal["rule", "llm"]
 GateStatus = Literal["PASS", "CONDITIONAL_PASS", "FAIL", "NEEDS_HUMAN_REVIEW"]
 
 

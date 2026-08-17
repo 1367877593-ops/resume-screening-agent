@@ -32,7 +32,6 @@ from config.settings import get_settings  # noqa: E402
 from harness import structured  # noqa: E402
 from harness.trace import read_traces, summarize  # noqa: E402
 from pipeline import api  # noqa: E402
-from schema.simulation import DIAGNOSIS_LABEL  # noqa: E402
 
 
 def _pct(part: int, total: int) -> str:
@@ -46,7 +45,6 @@ def _collect(runs: int) -> Dict[str, Any]:
     scores: Dict[str, List[float]] = {}
     recommendations: Dict[str, set] = {}
     issues: List[Dict[str, Any]] = []
-    diagnoses: List[Dict[str, Any]] = []
 
     for _ in range(runs):
         payload = api.result_to_dict(api.run(jd_text, resumes))
@@ -60,14 +58,11 @@ def _collect(runs: int) -> Dict[str, Any]:
                 # 漏掉它们会让规则类检出的占比被系统性低估。
                 for issue in stage["detected_issues"]:
                     issues.append({**issue, "stage": stage["stage"]})
-            if cand.get("simulation"):
-                diagnoses.extend(cand["simulation"]["diagnoses"])
 
     return {
         "scores": scores,
         "recommendations": recommendations,
         "issues": issues,
-        "diagnoses": diagnoses,
     }
 
 
@@ -108,7 +103,7 @@ def _report(runs: int, demo_mode: bool, data: Dict[str, Any], traces: Dict[str, 
         by_detector: Dict[str, int] = {}
         for i in issues:
             by_detector[i["detector"]] = by_detector.get(i["detector"], 0) + 1
-        for det in ("rule", "sim", "llm"):
+        for det in ("rule", "llm"):
             n = by_detector.get(det, 0)
             w(f"  {det:<5} {n:>3} 条　{_pct(n, total)}")
         w("  —— 这个占比是「用 LLM 验证 LLM」风险的直接度量：靠确定性规则"
@@ -121,22 +116,6 @@ def _report(runs: int, demo_mode: bool, data: Dict[str, Any], traces: Dict[str, 
         for code, n in sorted(by_code.items(), key=lambda kv: -kv[1]):
             det = next(i["detector"] for i in issues if i["issue_code"] == code)
             w(f"    {code:<28} {n:>3}　[{det}]")
-
-    # ---------------------------------------------------------- 三人格
-    w("\n【三人格盲评诊断】来源：本次运行的 SimulationReport")
-    diagnoses = data["diagnoses"]
-    if not diagnoses:
-        w("  未启用或本次运行没有进入模拟（SIMULATION_ENABLED=0，或题目阶段先被 blocker 拦下）。")
-    else:
-        counts: Dict[str, int] = {}
-        for d in diagnoses:
-            counts[d["diagnosis"]] = counts.get(d["diagnosis"], 0) + 1
-        total = len(diagnoses)
-        for key, label in DIAGNOSIS_LABEL.items():
-            n = counts.get(key, 0)
-            w(f"  {label:<8} {n:>3} 道　{_pct(n, total)}")
-        flagged = total - counts.get("GOOD", 0)
-        w(f"  —— {total} 道题里模拟标出了 {flagged} 道有问题的，这些题不需要人工逐条看。")
 
     # ---------------------------------------------------------- 稳定性
     w("\n【分数稳定性】来源：同一份简历重复运行的总分")
@@ -188,7 +167,6 @@ def main() -> None:
                 "traces": traces,
                 "scores": data["scores"],
                 "issues": data["issues"],
-                "diagnoses": data["diagnoses"],
             },
             ensure_ascii=False, indent=2,
         ))

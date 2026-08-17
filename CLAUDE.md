@@ -14,7 +14,7 @@
 按 L1 → L2 → L3 顺序推进，**上一层未跑通不写下一层的代码**：
 
 - **L1 闭环层**（✅ 已完成）：上传 → 提取 → 匹配打分与推进决策 → 排序 → 试题与追问 → 规则 Checker → 修订闭环 → Streamlit 展示
-- **L2 增强层**：三人格盲评模拟 + 反思飞轮（✅ 已完成）
+- **L2 增强层**：反思飞轮（✅ 已完成）
 - **L3 加固层**：`eval/run_eval.py`、trace 面板、语义 Checker（✅ 已完成）、UI 打磨
 
 任何时刻仓库里都必须有一个能跑通的 Demo。不要在闭环未完成时去优化加固层的东西。
@@ -38,25 +38,13 @@ schema ← harness ← store/ingest ← agents/checker ← pipeline ← app
 - 阈值全部来自 `config/thresholds.yaml`
 - `scorer.py` 不得调用 LLM，必须可单测
 
-## 信息隔离（防泄题）
+## 题目必须说清出题目的
 
-- `checker/simulation/personas.py` 中三个作答函数的参数类型只能是 `QuestionPublic`
-- `QuestionFull.to_public()` 是唯一的转换入口
-- 评分标准（rubric）只能出现在 grader 和 checker 中，**绝不进入 persona 的 prompt**
-- 这一隔离由类型签名保证，不依赖 prompt 中的自然语言约束
-- 给 `QuestionPublic` 加字段等于扩大泄题面，必须是一次显式改动，不要顺手加
-
-## 三人格盲评
-
-- 判定逻辑在 `checker/simulation/diagnose.py`，**纯代码不调 LLM**，阈值取自
-  `config/thresholds.yaml` 的 `simulation` 段，必须可单测
-- 诊断结论经 `content_rules.py` 里注册的规则翻译成 `Issue`（`detector="sim"`）；
-  规则函数本身不发起任何调用
-- 盲评标签按 `question_id` 派生种子打乱：**每题独立**（否则模型能跨题推断身份）、
-  **结果确定**（否则缓存键漂移，无 Key 回放必然未命中）
-- 每人格一次答完整套题，阅卷官一次评完 —— 调用量固定为每轮 4 次，与题目数量无关
-- 确定性规则先跑：出现 blocker 时跳过模拟，那套题马上要被重写
-- `SIMULATION_ENABLED=0` 必须能整体关掉，且不影响 L1 闭环
+- 每道题都要同时给出 `skill_point`（考察什么能力）与 `rationale`（为什么问这位候选人）
+- 两者回答的是不同的问题，**不要写成一句话**：前者是考察点，后者必须落到
+  具体的人 —— 指向简历里说不清楚的地方、匹配阶段的存疑项，或某条要求缺证据
+- 「考察候选人的工程能力」这类换谁都成立的话不是 `rationale`，是 `skill_point`
+- 面试官是照着这两项决定要不要问的，缺任何一项，题目就只是一句孤立的话
 
 ## 反思飞轮
 
@@ -86,8 +74,8 @@ schema ← harness ← store/ingest ← agents/checker ← pipeline ← app
   且 `SEMANTIC_CHECK_ENABLED=0` 能整体关掉而不影响主闭环
 - 每条规则用 `@register` 注册，新增规则不得修改调度代码
 - 规则文件按性质分两个：`structure_rules.py`（数量/schema/算术）与
-  `content_rules.py`（证据存在性/归因/查重/盲评结论翻译），不要继续拆细
-- 每个 `Issue` 必须填写 `detector` 字段（`rule` / `llm` / `sim`）
+  `content_rules.py`（证据存在性/归因/查重/语义结论翻译），不要继续拆细
+- 每个 `Issue` 必须填写 `detector` 字段（`rule` / `llm`）
 - 新增 issue_code 必须同步写进 `config/rubric.yaml`，两边对不上就是错
 - 统计「规则 vs LLM 检出占比」只能用 `StageOutcome.detected`（各轮累计），
   不能用最后一轮的 `report` —— 后者会漏掉所有已修复的问题，把占比算歪

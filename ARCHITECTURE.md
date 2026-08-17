@@ -14,10 +14,10 @@
 | 层 | 内容 | 状态 |
 |---|---|---|
 | **L1 闭环层** | 上传 → 提取 → 匹配打分与推进决策 → 候选人排序 → 试题与追问 → 规则 Checker → 修订闭环 → Streamlit 展示 | ✅ 已完成 |
-| **L2 增强层** | 三人格盲评模拟；反思飞轮 | ✅ 已完成 |
+| **L2 增强层** | 反思飞轮 | ✅ 已完成 |
 | **L3 加固层** | 语义 Checker、稳定性评测、trace 面板、UI 打磨 | ✅ 已完成 |
 
-顺序不能颠倒的原因是工程上的：任何时刻仓库里都必须有一个能跑通的 Demo。增强层的价值建立在闭环之上 —— 三人格盲评要有题可评，得先有出题；出题要有依据，得先有提取和匹配。先做深度再补闭环，中间任何一步卡住，整个项目就没有可运行的形态。
+顺序不能颠倒的原因是工程上的：任何时刻仓库里都必须有一个能跑通的 Demo。增强层的价值建立在闭环之上 —— 反思飞轮要有问题可沉淀，得先有校验；校验要有对象，得先有提取和匹配。先做深度再补闭环，中间任何一步卡住，整个项目就没有可运行的形态。
 
 ---
 
@@ -26,7 +26,7 @@
 1. **单向依赖**：`schema ← harness ← store/ingest ← agents/checker ← pipeline ← app`。任何反向 import 都是设计错误。
 2. **Harness 独立成层**：所有 LLM 调用必须经过 `harness`，业务代码里不出现任何厂商 SDK。
 3. **契约集中**：所有跨模块数据结构定义在 `schema/`，它不依赖任何其他模块。
-4. **信息隔离靠类型**：`QuestionFull` / `QuestionPublic` 是两个类型，防泄题由函数签名保证，不靠 prompt 请求模型自觉。
+4. **出题目的必须外显**：每道题都要给出 `skill_point`（考察什么）与 `rationale`（为什么问这个人），缺任一项的题目对面试官没有意义。
 5. **确定性优先**：能用规则校验的绝不调 LLM。**分数与决策一律由代码算出，LLM 只负责单项判定**。`Issue.detector` 字段记录来源，最终可统计「规则 vs LLM」的检出占比。
 6. **配置外置**：所有阈值进 `config/thresholds.yaml`，所有 prompt 进 `prompts/*.md`，代码里不出现魔数和长字符串。
 7. **闭环优先于深度**：任何时刻仓库里都必须有一个能跑通的 Demo。新增能力以不破坏闭环为前提。
@@ -56,10 +56,6 @@ resume-screening-agent/
 │   ├── match.md
 │   ├── question_gen.md
 │   ├── followup.md
-│   ├── persona_expert.md          # 三人格作答
-│   ├── persona_bluffer.md
-│   ├── persona_resume.md
-│   ├── grader.md                  # 盲评阅卷官
 │   ├── checker_semantic.md        # 语义一致性校验
 │   ├── reviser.md
 │   └── _archive/                  # ★ 旧版本必须留档，README 的迭代对比靠它
@@ -72,10 +68,9 @@ resume-screening-agent/
 │   │   ├── jd.py                  # JD, Requirement(weight, is_hard)
 │   │   ├── match.py               # RequirementVerdict, MatchResult, Recommendation
 │   │   ├── ranking.py             # ★ RankedCandidate, CandidateRanking（多简历横向对比）
-│   │   ├── question.py            # QuestionFull, QuestionPublic, Rubric, QuestionSet
+│   │   ├── question.py            # QuestionFull（含 skill_point / rationale）, Rubric, QuestionSet
 │   │   ├── followup.py            # AmbiguityPoint, FollowUpQuestion
 │   │   ├── issue.py               # Issue, Severity, Detector, CheckReport, Gate
-│   │   ├── simulation.py          # Persona, SimAnswer, SimScore, QuestionDiagnosis
 │   │   ├── semantic.py            # SemanticFinding, SemanticReport
 │   │   └── lesson.py              # Lesson（飞轮经验条目）
 │   │
@@ -110,11 +105,6 @@ resume-screening-agent/
 │   │   │   ├── structure_rules.py # 数量、schema、字段完整性、算术一致性
 │   │   │   └── content_rules.py   # 证据存在性、归因正确性、题目重复度
 │   │   ├── semantic.py            # detector = "llm"，只在规则全过后才跑
-│   │   ├── simulation/            # detector = "sim" ★
-│   │   │   ├── personas.py        # 三人格作答（签名只收 QuestionPublic）
-│   │   │   ├── grader.py          # 盲评，标签按题打乱
-│   │   │   ├── diagnose.py        # 三分对照真值表，纯代码
-│   │   │   └── run.py             # 作答 -> 盲评 -> 诊断
 │   │   └── gate.py                # 通过规则 + 熔断
 │   │
 │   ├── flywheel/
@@ -132,13 +122,13 @@ resume-screening-agent/
 │       ├── upload_view.py         # JD 文本框 + 简历多文件上传
 │       ├── ranking_view.py        # ★ 首屏：候选人排序表 + 推进决策
 │       ├── match_view.py          # 分项判定 + 点击理由高亮原文
-│       ├── question_view.py       # 10 题 + 三人格盲评热力图
+│       ├── question_view.py       # 10 题 + 每题的考察点与出题原因
 │       ├── checker_view.py        # issue 列表 + 修订前后 diff
 │       ├── trace_view.py          # 调用链
 │       └── history_view.py        # 历次批次回看 + 跨批次最高分
 │
 ├── eval/
-│   └── run_eval.py                # 检出占比 / 盲评诊断分布 / 分数方差
+│   └── run_eval.py                # 检出占比 / 分数方差
 │
 ├── data/
 │   ├── samples/                   # 1 份 JD + 3 份简历（推进 / 待定 / 淘汰各一）
@@ -175,7 +165,7 @@ graph TD
     APP["app / Streamlit<br/>upload · ranking · match · question · checker · trace"]
     PIPE["pipeline<br/>orchestrator 状态机"]
     AG["agents<br/>jd_parser · extractor · matcher · scorer<br/>question_gen · followup_gen · reviser"]
-    CK["checker<br/>rules · semantic · simulation · gate"]
+    CK["checker<br/>rules · semantic · gate"]
     HN["harness<br/>llm_client · structured · trace · cache"]
     ST["store<br/>SQLite · repository"]
     IN["ingest<br/>pdf/docx/text → RawDoc"]
@@ -250,20 +240,6 @@ def rank(results: list[MatchResult]) -> CandidateRanking: ...
 # 按 total_score 降序；hard_requirement_failed 非空者永远沉底
 
 
-# checker/simulation/personas.py —— 信息隔离靠签名保证
-def answer_as_expert(questions: list[QuestionPublic], jd: JD) -> list[SimAnswer]: ...
-def answer_as_bluffer(questions: list[QuestionPublic]) -> list[SimAnswer]: ...
-def answer_as_resume(questions: list[QuestionPublic], resume_text: str) -> list[SimAnswer]: ...
-# 三者都拿不到 QuestionFull，看不见评分标准
-
-# checker/simulation/grader.py —— 整套题一次评完，而不是按题逐次调用
-def grade_blind(questions: list[QuestionFull], answers: list[SimAnswer]) -> list[SimScore]: ...
-# 标签 A/B/C 按 question_id 派生种子打乱（每题独立、结果确定），代码侧映射回 persona
-
-# checker/simulation/diagnose.py —— 纯代码，不调 LLM
-def diagnose(scores: list[SimScore], thresholds: dict) -> list[QuestionDiagnosis]: ...
-
-
 # checker/gate.py
 def evaluate_gate(report: CheckReport, round_no: int) -> GateResult: ...
 # blocker 存在 → FAIL；major >= 3 → FAIL；major 1-2 → CONDITIONAL_PASS
@@ -294,8 +270,7 @@ flowchart TD
     G -->|PASS| I["SCORE + RANK<br/>纯代码：加权 → 排序 → 推进决策"]
     I -->|REJECT| N["OUTPUT<br/>结构化决策建议"]
     I -->|ADVANCE / HOLD| J["GENERATE_QA<br/>≥10 题 + 3-5 追问"]
-    J --> K["SIMULATE 三人格盲评"]
-    K --> L{"CHECK(question / set)"}
+    J --> L{"CHECK(question / set)"}
     L -->|FAIL| M["REVISE → 增量重跑"]
     M --> L
     L -->|PASS| O["WRITE_LESSONS<br/>（飞轮）"]
@@ -327,19 +302,23 @@ flowchart TD
 | **数据准确性** | `EXT_FIELD_MISSING`、`EXT_DATE_CONFLICT`、`MATCH_ARITHMETIC_MISMATCH` | rule | 字段完整性、日期区间自洽、加权分与分项是否对得上 |
 | **归因错误** | `EXT_SPAN_NOT_FOUND`、`MATCH_EVIDENCE_INVALID`、`MATCH_EVIDENCE_EMPTY` | rule | span 在原文中做模糊匹配，匹配不上即判定为无出处 |
 | **格式与约束** | `Q_COUNT_LT_MIN`、`FU_COUNT_OUT_OF_RANGE`、`Q_RUBRIC_MISSING` | rule | 数量与 schema 校验 |
-| **题目质量** | `Q_DUPLICATE`（rule）、`Q_NO_DISCRIMINATION`、`Q_UNANSWERABLE`、`Q_OUT_OF_RANGE`（sim） | rule / sim | 题干相似度查重 + 三人格盲评三分对照 |
+| **题目质量** | `Q_DUPLICATE` | rule | 题干相似度查重 |
 | **语义一致性** | `SEM_REASON_CONTRADICTS_EVIDENCE` | llm | 前四类都判不了时才调 LLM |
 
-### 三分对照真值表（盲评的判定核心）
+### 每道题必须交代出题目的
 
-| 理想专家 | 背题党 | 简历人格 | 诊断 |
-|---|---|---|---|
-| 高 | 低 | 高 | ✅ 好题：有区分度，且候选人确实答得上 |
-| 高 | 低 | 低 | ⚠️ 偏难或超出简历射程，标记待人工确认 |
-| 高 | 高 | — | ❌ 无区分度：背题即可作答 |
-| 低 | — | — | ❌ 题目本身有问题：表述不清或无解 |
+| 字段 | 回答什么 | 约束 |
+|---|---|---|
+| `skill_point` | 考察什么能力 | 不要重复题干 |
+| `rationale` | 为什么问**这位**候选人 | 必须落到具体的人：简历里说不清楚的地方、匹配结论里的存疑项，或某条要求缺证据 |
 
-阈值 `expert_pass` / `bluffer_max` 在 `config/thresholds.yaml` 中定义，用少量人工标注题校准。
+两者回答的是不同的问题，不写成一句话。「考察候选人的工程能力」这类换谁都成立的话
+是 `skill_point` 而不是 `rationale`。约束写在 `prompts/question_gen.md` 里（含正反例），
+schema 侧两个字段并列存放，界面上分两行展示。
+
+**兜底能力有限**：`rationale` 写得够不够具体只有非空校验，没有确定性规则能判断
+「这句话是不是落到了具体的人」。真要兜住，得要求它引用简历原文或存疑项编号，
+那样才能像 evidence 一样被规则核对。
 
 ---
 
@@ -357,20 +336,21 @@ flowchart TD
 - `make demo` 即 `DEMO_MODE=1` 启动，样例数据（1 份 JD + 3 份简历）内置在 `data/samples/`。
 - **三份简历刻意覆盖三档决策**：推进 / 待定 / 淘汰各一位。只配「全 YES」和「全 NO」两个极端时，
   分档阈值、`PARTIAL` 判定与 `CONDITIONAL_PASS` 放行写了也演示不出来。
-- 样例还刻意保留三处不完美：首轮题目数量不足被规则打回一轮；一道题被盲评判为无区分度；
-  另一道被判超出候选人射程。演示的是机制在工作，不是一份摆拍的完美结果。
+- 样例还刻意保留两处不完美：首轮题目数量不足被规则打回一轮；一条判定的理由与它引用的
+  原文互相矛盾，只有语义校验抓得住。演示的是机制在工作，不是一份摆拍的完美结果。
 
 缓存这一层是一处投入、三处收益：开发期不烧钱、无 Key 可复现、修订时未变更对象可复用上轮结论。
 
 ### 成本控制
 
-按题逐次调用的话，三人格 × 10 题就是 30 次作答，加上盲评、提取、匹配、生成、校验、修订，跑一次上百次调用。因此：
+按对象逐次调用的话，10 道题就是 10 次校验，加上提取、匹配、生成、修订，一次运行的调用量很快失控。因此：
 
-- **每个人格一次答完整套题，阅卷官一次评完所有答案** —— 模拟的调用量压到每轮 4 次，与题目数量无关。
-- **确定性规则先跑**：题目数量不足这类 blocker 一出现就跳过模拟，这套题马上要被重写。
+- **整套题一次生成、一次校验**，调用量与题目数量无关。
+- **确定性规则先跑**：能用字符串匹配和算术判断的，绝不花一次 LLM 调用。
+- **语义校验排在最后**：只在确定性规则全过后才跑，只送检有证据的判定。
 - `cache.py` 属于 **L1**，不是优化项。开发期反复调试全靠它。
-- 区分 `LLM_MODEL` 与 `LLM_MODEL_CHEAP`：作答、提取、出题用快模型，匹配判定与盲评用强模型。
-- `SIMULATION_ENABLED=0` 可整体关掉盲评，不影响 L1 闭环。
+- 区分 `LLM_MODEL` 与 `LLM_MODEL_CHEAP`：提取、出题用快模型，匹配判定与语义校验用强模型。
+- `SEMANTIC_CHECK_ENABLED=0` 可整体关掉语义校验，不影响 L1 闭环。
 
 ### Prompt 迭代留证
 
@@ -381,8 +361,7 @@ flowchart TD
 只说「做了幻觉与格式错误的处理」不值钱，给得出数字才值钱。以下全部由 `eval/run_eval.py` 从 trace 与实际运行中统计，`make eval` 可当场重跑：
 
 - 结构化输出一次成功率 / 回灌重试后成功率
-- 规则 vs 盲评 vs LLM 的 issue 检出占比（按各轮累计检出算，不是最终报告）
-- 三人格盲评的诊断分布
+- 规则 vs LLM 的 issue 检出占比（按各轮累计检出算，不是最终报告）
 - 同一份简历跑 N 次的总分方差（回放模式下恒为 0，会明确标注）
 
 ---
@@ -404,8 +383,7 @@ flowchart TD
 
 | 阶段 | 内容 | 完成标志 | 状态 |
 |---|---|---|---|
-| 6 | simulation 三人格 + 盲评 + 诊断 | 题目热力图出来，能指出哪道题无区分度 | ✅ |
-| 7 | flywheel | 第二次运行时能看到经验被检索注入 | ✅ |
+| 6 | flywheel | 第二次运行时能看到经验被检索注入 | ✅ |
 
 ### L3 加固层
 
@@ -428,5 +406,5 @@ README 面向的是第一次打开这个仓库的人。约定如下，改 README
 5. **数字必须可复现**：凡是写进 README 的指标，都要能用 `make eval` 或 `make test`
    当场跑出来。跑不出来的指标不写占位符，直接说明为什么没有。
 6. **未实现的东西不进能力表**，统一写在「已知局限」里，逐条说清楚缺什么。
-7. **对自己不利的数字照写**：规则 vs LLM 检出占比、盲评的循环论证风险、
+7. **对自己不利的数字照写**：规则 vs LLM 检出占比、语义校验的循环论证风险、
    没有测试覆盖的路径 —— 藏起来只会在被追问时更难看。

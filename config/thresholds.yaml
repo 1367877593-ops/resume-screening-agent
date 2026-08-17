@@ -25,8 +25,3 @@ evidence:
   # 过短的 span 不具备归因意义：「Python」这类词在任何简历里都能匹配上。
   # 取 8 是为了和 prompt 里「引用 10-60 字」的要求呼应，留一点余量给标点差异。
   min_span_length: 8
-
-simulation:
-  expert_pass: 70.0     # 理想专家低于此分 -> 题目本身有问题
-  bluffer_max: 50.0     # 背题党高于此分 -> 题目无区分度
-  resume_pass: 60.0     # 简历人格低于此分 -> 超出候选人射程

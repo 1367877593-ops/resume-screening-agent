@@ -157,7 +157,6 @@ def result_to_dict(result: PipelineResult, run_id: Optional[str] = None) -> Dict
                 "match": o.match_result.model_dump(mode="json"),
                 "questions": o.question_set.model_dump(mode="json") if o.question_set else None,
                 "followups": o.followups.model_dump(mode="json") if o.followups else None,
-                "simulation": o.simulation.model_dump(mode="json") if o.simulation else None,
                 "semantic": o.semantic.model_dump(mode="json") if o.semantic else None,
                 "stages": [
                     {
@@ -257,7 +256,6 @@ def runtime_mode() -> Dict[str, Any]:
         "access_control": bool(s.app_access_code),
         "cache_enabled": s.cache_enabled,
         "max_parallel_candidates": s.max_parallel_candidates,
-        "simulation_enabled": s.simulation_enabled,
         "semantic_check_enabled": s.semantic_check_enabled,
         "persist_runs": s.persist_runs,
     }

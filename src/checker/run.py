@@ -13,7 +13,6 @@ from schema.match import MatchResult
 from schema.question import QuestionSet
 from schema.resume import ExtractedResume
 from schema.semantic import SemanticReport
-from schema.simulation import SimulationReport
 
 from checker import rules  # noqa: F401  导入即注册，不可删
 from checker.base import RuleContext, run_rules
@@ -60,14 +59,11 @@ def check_question_set(
     resume_doc: RawDoc,
     round_no: int = 0,
     thresholds: Optional[dict] = None,
-    simulation: Optional[SimulationReport] = None,
 ) -> Checked:
-    """`simulation` 为 None 时只跑确定性规则 —— 模拟是可选增强，不是前置依赖。"""
     ctx = RuleContext(
         thresholds=thresholds or get_thresholds(),
         question_set=question_set,
         resume_doc=resume_doc,
-        simulation=simulation,
     )
     return _finish("question_set", question_set.resume_id, ctx, round_no)
 

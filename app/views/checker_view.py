@@ -14,7 +14,7 @@ import streamlit as st
 from views._shared import candidate_picker, gate_badge
 
 SEVERITY = {"blocker": "🔴 blocker", "major": "🟠 major", "minor": "⚪ minor"}
-DETECTOR = {"rule": "规则", "llm": "LLM", "sim": "模拟"}
+DETECTOR = {"rule": "规则", "llm": "LLM"}
 STAGE_NAME = {"extract": "简历提取", "match": "匹配判定",
               "question_set": "题目", "followup": "追问"}
 
